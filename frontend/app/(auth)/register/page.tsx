@@ -3,8 +3,8 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { motion } from 'framer-motion';
-import { Mail, Lock, User, Eye, EyeOff, CheckSquare, AlertCircle } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Mail, Lock, User, Eye, EyeOff, AlertCircle, CheckCircle2, Clock } from 'lucide-react';
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -17,18 +17,75 @@ export default function RegisterPage() {
   
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [registrationSuccess, setRegistrationSuccess] = useState<string | null>(null);
+
+  // Resend cooldown timer for email verification
+  const [registeredEmail, setRegisteredEmail] = useState<string | null>(null);
+  const [isResending, setIsResending] = useState(false);
+  const [cooldown, setCooldown] = useState(0);
+
+  const startCooldownTimer = (seconds: number) => {
+    setCooldown(seconds);
+    const interval = setInterval(() => {
+      setCooldown((prev) => {
+        if (prev <= 1) {
+          clearInterval(interval);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  };
+
+  const handleResendVerification = async () => {
+    if (!registeredEmail || cooldown > 0 || isResending) return;
+    setIsResending(true);
+    setErrorMessage(null);
+
+    try {
+      const res = await fetch('/api/auth/resend-verification', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: registeredEmail }),
+      });
+      const data = await res.json();
+      setIsResending(false);
+
+      if (!res.ok) {
+        setErrorMessage(data.message || 'Failed to resend verification email.');
+        if (data.remainingSeconds) {
+          startCooldownTimer(data.remainingSeconds);
+        }
+      } else {
+        setRegistrationSuccess('Verification email sent again. Please check your inbox.');
+        startCooldownTimer(data.cooldownSeconds || 60);
+      }
+    } catch {
+      setIsResending(false);
+      setErrorMessage('Network connection error while resending verification.');
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setErrorMessage(null);
+    if (isLoading) return;
 
+    setErrorMessage(null);
+    setRegistrationSuccess(null);
+
+    const cleanEmail = email.trim();
     if (password !== confirmPassword) {
       setErrorMessage('Passwords do not match.');
       return;
     }
 
+    if (password.length < 8) {
+      setErrorMessage('Password must be at least 8 characters.');
+      return;
+    }
+
     if (!termsAccepted) {
-      setErrorMessage('Please accept the privacy policy and consent to facial processing.');
+      setErrorMessage('Please accept the biometric privacy policy and terms of service.');
       return;
     }
 
@@ -40,7 +97,7 @@ export default function RegisterPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: name.trim(),
-          email: email.trim(),
+          email: cleanEmail,
           password,
           confirmPassword,
           termsAccepted,
@@ -48,175 +105,210 @@ export default function RegisterPage() {
       });
 
       const data = await res.json();
+      setIsLoading(false);
 
       if (!res.ok || !data.success) {
-        setIsLoading(false);
         setErrorMessage(data.message || 'Registration failed.');
         return;
       }
 
-      // Success, route to compare
-      router.push('/compare');
-      router.refresh();
-    } catch (err) {
+      // Success
+      setRegisteredEmail(cleanEmail);
+      setRegistrationSuccess(
+        data.message || 'Account created successfully! If email verification is enabled, please check your inbox.'
+      );
+      startCooldownTimer(60);
+    } catch {
       setIsLoading(false);
       setErrorMessage('A network error occurred. Please check your connection.');
     }
   };
 
   return (
-    <div className="relative min-h-screen w-full flex items-center justify-center p-4 overflow-hidden bg-[#090414]">
-      {/* Background gradients */}
-      <div 
-        className="absolute inset-0 pointer-events-none"
-        style={{
-          background: 'radial-gradient(ellipse 80% 80% at 20% -10%, #3d0c2c 0%, #170929 45%, #080312 80%)',
-        }}
-      />
-      <div 
-        className="absolute w-[600px] h-[600px] rounded-full blur-[140px] pointer-events-none -bottom-20 -right-20 opacity-60"
-        style={{
-          background: 'radial-gradient(circle, rgba(14, 116, 144, 0.45) 0%, rgba(30, 27, 75, 0.2) 65%, transparent 100%)',
-        }}
-      />
+    <div className="relative min-h-screen w-full flex items-center justify-center p-4 overflow-hidden bg-gradient-to-br from-[#120722] via-[#240b36] to-[#0d041a]">
+      {/* Background ambient lighting */}
+      <div className="absolute inset-0 bg-radial-gradient from-purple-900/30 via-transparent to-black pointer-events-none" />
+      <div className="absolute -top-32 -right-32 w-96 h-96 bg-purple-600/20 rounded-full blur-[140px] pointer-events-none" />
+      <div className="absolute -bottom-32 -left-32 w-96 h-96 bg-cyan-600/20 rounded-full blur-[140px] pointer-events-none" />
 
+      {/* Main Glassmorphic Register Card */}
       <motion.div
-        initial={{ opacity: 0, scale: 0.96, y: 15 }}
+        initial={{ opacity: 0, scale: 0.96, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
-        transition={{ duration: 0.5, ease: "easeOut" }}
-        className="relative z-10 w-full max-w-[460px] rounded-[36px] p-8 md:p-10 shadow-2xl backdrop-blur-2xl border border-white/10"
-        style={{
-          background: 'linear-gradient(145deg, rgba(46, 22, 69, 0.45) 0%, rgba(20, 11, 33, 0.65) 100%)',
-          boxShadow: '0 25px 60px -15px rgba(0, 0, 0, 0.7), 0 0 40px -10px rgba(168, 85, 247, 0.15)',
-        }}
+        transition={{ duration: 0.5, ease: 'easeOut' }}
+        className="relative z-10 w-full max-w-[440px] rounded-[32px] p-8 md:p-10 border border-white/10 bg-white/[0.04] backdrop-blur-2xl shadow-2xl shadow-purple-950/50"
       >
-        <div className="flex flex-col items-center justify-center mb-6">
-          <div className="w-16 h-16 rounded-full flex items-center justify-center p-[2px] bg-gradient-to-tr from-cyan-400/40 via-purple-500/40 to-pink-500/40 shadow-[0_0_20px_rgba(168,85,247,0.25)]">
-            <div className="w-full h-full rounded-full bg-[#1b0d2b] flex items-center justify-center border border-white/15">
-              <User className="w-8 h-8 text-white/80" strokeWidth={1.5} />
-            </div>
+        <div className="flex flex-col items-center mb-6">
+          <div className="w-16 h-16 rounded-full bg-gradient-to-tr from-purple-500/20 via-pink-500/20 to-cyan-500/20 border border-white/20 flex items-center justify-center shadow-inner mb-3">
+            <User className="w-8 h-8 text-white/80 stroke-[1.5]" />
           </div>
-          <h1 className="mt-3 text-xl font-medium text-white tracking-wide">
-            Create Account
-          </h1>
-          <p className="text-xs text-white/50 tracking-wider uppercase mt-1">
-            Join AI Facial Similarity Analyzer
-          </p>
+          <h1 className="text-2xl font-semibold tracking-wide text-white">Create Account</h1>
+          <p className="text-xs text-purple-200/60 mt-1">Join AI Face Similarity Analyzer</p>
         </div>
 
-        {errorMessage && (
-          <motion.div
-            initial={{ opacity: 0, y: -8 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="mb-5 p-3 rounded-xl bg-red-500/15 border border-red-500/30 text-red-200 text-xs flex items-center gap-2.5"
-          >
-            <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
-            <span>{errorMessage}</span>
-          </motion.div>
-        )}
+        {/* Alerts */}
+        <AnimatePresence>
+          {errorMessage && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              className="mb-5 p-3 rounded-xl bg-red-500/10 border border-red-500/30 flex items-start gap-2.5"
+            >
+              <AlertCircle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
+              <span className="text-xs text-red-200 leading-relaxed">{errorMessage}</span>
+            </motion.div>
+          )}
 
+          {registrationSuccess && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              className="mb-5 p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex flex-col gap-2.5"
+            >
+              <div className="flex items-start gap-2.5">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 mt-0.5 shrink-0" />
+                <span className="text-xs text-emerald-200 leading-relaxed">{registrationSuccess}</span>
+              </div>
+              <div className="flex items-center justify-between pt-2 border-t border-emerald-500/20">
+                <Link
+                  href="/login"
+                  className="text-xs font-semibold text-emerald-300 hover:text-emerald-200 underline"
+                >
+                  Proceed to Login &rarr;
+                </Link>
+                <button
+                  type="button"
+                  onClick={handleResendVerification}
+                  disabled={isResending || cooldown > 0}
+                  className="text-[11px] font-medium text-cyan-300 hover:text-cyan-200 disabled:opacity-50 flex items-center gap-1"
+                >
+                  {isResending ? (
+                    'Sending...'
+                  ) : cooldown > 0 ? (
+                    <>
+                      <Clock className="w-3 h-3 animate-spin" />
+                      Resend in {cooldown}s
+                    </>
+                  ) : (
+                    'Resend Email'
+                  )}
+                </button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Form Inputs */}
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="relative group">
-            <div className="absolute left-0 bottom-2.5 flex items-center pointer-events-none text-white/60 group-focus-within:text-cyan-400 transition-colors">
-              <User className="w-5 h-5" />
+            <div className="flex items-center gap-3 pb-2 border-b border-white/20 group-focus-within:border-cyan-400 transition-colors">
+              <User className="w-5 h-5 text-white/50 group-focus-within:text-cyan-400 transition-colors" />
+              <input
+                type="text"
+                placeholder="Full Name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                required
+                disabled={isLoading}
+                className="w-full bg-transparent text-sm text-white placeholder-white/40 focus:outline-none"
+              />
             </div>
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Full Name"
-              required
-              className="login-input-underline text-sm md:text-base font-light"
-            />
           </div>
 
           <div className="relative group">
-            <div className="absolute left-0 bottom-2.5 flex items-center pointer-events-none text-white/60 group-focus-within:text-cyan-400 transition-colors">
-              <Mail className="w-5 h-5" />
+            <div className="flex items-center gap-3 pb-2 border-b border-white/20 group-focus-within:border-cyan-400 transition-colors">
+              <Mail className="w-5 h-5 text-white/50 group-focus-within:text-cyan-400 transition-colors" />
+              <input
+                type="email"
+                placeholder="Email Address"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                disabled={isLoading}
+                autoComplete="email"
+                className="w-full bg-transparent text-sm text-white placeholder-white/40 focus:outline-none"
+              />
             </div>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="Email ID"
-              required
-              className="login-input-underline text-sm md:text-base font-light"
-            />
           </div>
 
           <div className="relative group">
-            <div className="absolute left-0 bottom-2.5 flex items-center pointer-events-none text-white/60 group-focus-within:text-cyan-400 transition-colors">
-              <Lock className="w-5 h-5" />
+            <div className="flex items-center gap-3 pb-2 border-b border-white/20 group-focus-within:border-cyan-400 transition-colors">
+              <Lock className="w-5 h-5 text-white/50 group-focus-within:text-cyan-400 transition-colors" />
+              <input
+                type={showPassword ? 'text' : 'password'}
+                placeholder="Password (min 8 chars)"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                disabled={isLoading}
+                autoComplete="new-password"
+                className="w-full bg-transparent text-sm text-white placeholder-white/40 focus:outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="text-white/40 hover:text-white/80 transition-colors"
+              >
+                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
             </div>
-            <input
-              type={showPassword ? 'text' : 'password'}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Password (minimum 8 characters)"
-              required
-              className="login-input-underline text-sm md:text-base font-light pr-8"
-            />
-            <button
-              type="button"
-              onClick={() => setShowPassword(!showPassword)}
-              className="absolute right-1 bottom-2.5 text-white/50 hover:text-white transition-colors"
-            >
-              {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-            </button>
           </div>
 
           <div className="relative group">
-            <div className="absolute left-0 bottom-2.5 flex items-center pointer-events-none text-white/60 group-focus-within:text-cyan-400 transition-colors">
-              <Lock className="w-5 h-5" />
+            <div className="flex items-center gap-3 pb-2 border-b border-white/20 group-focus-within:border-cyan-400 transition-colors">
+              <Lock className="w-5 h-5 text-white/50 group-focus-within:text-cyan-400 transition-colors" />
+              <input
+                type={showPassword ? 'text' : 'password'}
+                placeholder="Confirm Password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                required
+                disabled={isLoading}
+                autoComplete="new-password"
+                className="w-full bg-transparent text-sm text-white placeholder-white/40 focus:outline-none"
+              />
             </div>
-            <input
-              type={showPassword ? 'text' : 'password'}
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              placeholder="Confirm Password"
-              required
-              className="login-input-underline text-sm md:text-base font-light"
-            />
           </div>
 
           <div className="pt-2">
-            <label className="flex items-start gap-2.5 cursor-pointer text-xs text-white/70 hover:text-white select-none">
+            <label className="flex items-start gap-2.5 text-xs text-white/70 cursor-pointer select-none">
               <input
                 type="checkbox"
                 checked={termsAccepted}
                 onChange={(e) => setTermsAccepted(e.target.checked)}
-                className="mt-0.5 w-4 h-4 rounded bg-white/10 border-white/20 text-indigo-500 accent-indigo-600 cursor-pointer"
+                className="w-4 h-4 mt-0.5 rounded border-white/20 bg-white/10 text-cyan-400 focus:ring-0 focus:ring-offset-0 cursor-pointer"
               />
               <span>
-                I agree to the Terms of Service, Privacy Policy, and consent to ephemeral facial similarity analysis. Photographs are purged post-inference.
+                I agree to the Terms and consent to processing biometric facial similarity strictly for this analysis.
               </span>
             </label>
           </div>
 
-          <div className="pt-3">
-            <button
-              type="submit"
-              disabled={isLoading}
-              className="w-full py-3.5 px-6 rounded-full text-white font-medium text-sm md:text-base tracking-widest uppercase transition-all duration-300 shadow-lg disabled:opacity-50 hover:shadow-[0_0_25px_rgba(99,102,241,0.55)] active:scale-[0.98]"
-              style={{
-                background: 'linear-gradient(90deg, #4f46e5 0%, #7c3aed 50%, #2563eb 100%)',
-              }}
-            >
-              {isLoading ? 'Creating Account...' : 'REGISTER'}
-            </button>
-          </div>
+          <button
+            type="submit"
+            disabled={isLoading}
+            className="w-full py-3.5 px-6 mt-4 rounded-2xl bg-gradient-to-r from-purple-600 via-pink-600 to-cyan-500 hover:opacity-95 text-white font-medium text-sm tracking-wide shadow-lg shadow-purple-900/40 transition-all transform active:scale-[0.99] disabled:opacity-50 disabled:pointer-events-none flex items-center justify-center gap-2"
+          >
+            {isLoading ? (
+              <>
+                <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                <span>CREATING ACCOUNT...</span>
+              </>
+            ) : (
+              <span>REGISTER</span>
+            )}
+          </button>
         </form>
 
-        <div className="mt-6 pt-4 border-t border-white/10 text-center">
-          <p className="text-xs text-white/60">
-            Already registered?{' '}
-            <Link href="/login" className="text-cyan-300 hover:text-cyan-200 font-medium ml-1">
-              Log in here
-            </Link>
-          </p>
+        <div className="mt-6 text-center text-xs text-purple-200/50">
+          Already registered?{' '}
+          <Link href="/login" className="text-cyan-300 hover:underline font-medium">
+            Sign In here
+          </Link>
         </div>
       </motion.div>
     </div>
   );
 }
-

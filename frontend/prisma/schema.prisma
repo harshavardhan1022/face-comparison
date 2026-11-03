@@ -1,0 +1,121 @@
+// Prisma Schema for AI Face Similarity Analyzer v2.0.0
+// Supports PostgreSQL in production and SQLite for local development
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite" // Or "postgresql" via DATABASE_URL in production
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id             String        @id @default(uuid())
+  name           String
+  email          String        @unique
+  passwordHash   String
+  role           String        @default("USER") // "USER" | "ADMIN" | "SUPER_ADMIN"
+  status         String        @default("ACTIVE") // "ACTIVE" | "INACTIVE" | "SUSPENDED"
+  emailVerified  Boolean       @default(false)
+  lastLoginAt    DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  comparisons    Comparison[]
+  auditLogs      AuditLog[]
+  resetTokens    PasswordResetToken[]
+  retainedImages ComparisonImage[]
+
+  @@index([email])
+  @@index([role])
+  @@index([status])
+}
+
+model PasswordResetToken {
+  id         String    @id @default(uuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  usedAt     DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([tokenHash])
+  @@index([userId])
+}
+
+model Comparison {
+  id                 String   @id @default(uuid())
+  userId             String
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  similarityScore    Float    // Calibrated 0 - 100 Index
+  rawCosineScore     Float    // Raw cosine similarity [-1, 1]
+  similarityCategory String   // "High Similarity" | "Moderate Similarity" | "Low Similarity" | "Inconclusive"
+  modelVersion       String   // e.g. "ArcFace-r100-v2"
+  imageQuality       String   // e.g. "Optimal (0.94 / 0.91)"
+  processingStatus   String   @default("COMPLETED") // "QUEUED" | "PROCESSING" | "COMPLETED" | "FAILED"
+  
+  consentGiven       Boolean  @default(false) // Explicit user consent for image retention
+  hasRetainedImages  Boolean  @default(false)
+  aiDetectionStatus  String?  // "AUTHENTIC" | "SUSPECTED_AI" | "INCONCLUSIVE"
+
+  image1Hash         String?
+  image2Hash         String?
+  metadataJson       String?  // JSON string: landmarks, bounding boxes, latency, etc.
+  
+  createdAt          DateTime @default(now())
+
+  retainedImages     ComparisonImage[]
+
+  @@index([userId])
+  @@index([createdAt])
+  @@index([processingStatus])
+}
+
+model ComparisonImage {
+  id           String     @id @default(uuid())
+  comparisonId String
+  comparison   Comparison @relation(fields: [comparisonId], references: [id], onDelete: Cascade)
+  userId       String
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  slot         String     // "IMAGE_1" | "IMAGE_2"
+  storageKey   String     // Encrypted base64 dataUrl or secure private path
+  mimeType     String     @default("image/jpeg")
+  createdAt    DateTime   @default(now())
+
+  @@index([comparisonId])
+  @@index([userId])
+}
+
+model ModelEvaluation {
+  id                String   @id @default(uuid())
+  modelName         String   // "ArcFace-ResNet100"
+  modelVersion      String   // "v2.4"
+  datasetVersion    String   // "LFW-Cleaned-v1"
+  evaluationMetrics String   // JSON string: { accuracy, precision, recall, roc_auc, eer, far, frr, tar }
+  thresholdsJson    String   // JSON string of calibrated decision boundaries
+  evaluationDate    DateTime @default(now())
+
+  @@index([modelVersion])
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action     String   // e.g. "USER_LOGIN", "PASSWORD_CHANGE", "FACE_COMPARISON", "AI_DETECTION_FLAG"
+  eventType  String   // "AUTH", "INFERENCE", "SECURITY", "ADMIN"
+  severity   String   @default("INFO") // "INFO" | "WARNING" | "CRITICAL"
+  status     String   @default("SUCCESS") // "SUCCESS" | "FAILURE"
+  ipAddress  String?
+  userAgent  String?
+  details    String?  // JSON context
+  createdAt  DateTime @default(now())
+
+  @@index([userId])
+  @@index([eventType])
+  @@index([createdAt])
+  @@index([severity])
+}

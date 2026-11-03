@@ -1,0 +1,77 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: face-similarity-db
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres_secure_pass_2026}
+      POSTGRES_DB: ${POSTGRES_DB:-facesimilarity}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal-net
+
+  # Python FastAPI AI Inference Engine
+  ai-service:
+    build:
+      context: ./ai-service
+      dockerfile: ../infrastructure/docker/Dockerfile.ai-service
+    container_name: face-similarity-ai
+    restart: always
+    environment:
+      - AI_SERVICE_HOST=0.0.0.0
+      - AI_SERVICE_PORT=8000
+      - ENVIRONMENT=production
+    ports:
+      - "8000:8000"
+    networks:
+      - internal-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Next.js Frontend Application
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: ../infrastructure/docker/Dockerfile.frontend
+    container_name: face-similarity-web
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ai-service:
+        condition: service_started
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres_secure_pass_2026}@postgres:5432/${POSTGRES_DB:-facesimilarity}?schema=public
+      - JWT_SECRET=${JWT_SECRET:-super-secret-jwt-key-production-face-similarity-2026-auth}
+      - ADMIN_REGISTRATION_SECRET=${ADMIN_REGISTRATION_SECRET:-admin-secret-provisioning-key-2026}
+      - AI_SERVICE_INTERNAL_URL=http://ai-service:8000
+      - NEXT_PUBLIC_AI_SERVICE_URL=http://localhost:8000
+    ports:
+      - "3000:3000"
+    networks:
+      - internal-net
+
+networks:
+  internal-net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local
+

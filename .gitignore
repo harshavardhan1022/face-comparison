@@ -1,0 +1,71 @@
+# ==============================================================================
+# AI Face Similarity Analyzer — Git Ignore Configuration
+# ==============================================================================
+
+# Node.js & Next.js Build Outputs
+node_modules/
+.next/
+out/
+build/
+dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Python & AI Microservice
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+.installed.cfg
+*.egg
+.keras/
+.gemini/
+
+# Secrets & Environment Files (NEVER commit secrets!)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.pem
+*.key
+
+# SQLite Databases & Local Storage
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+frontend/dev.db
+frontend/dev.db-journal
+
+# Temporary Upload Directories & Cache
+uploads_temp/
+frontend/uploads_temp/
+scratch/
+*.tmp*
+.tmp*
+
+# Test Artifacts & OS Metadata
+scripts/test_face_1.jpg
+scripts/test_face_2.jpg
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDE & Editor Specific
+.vscode/
+.idea/
+*.swp
+*.swo

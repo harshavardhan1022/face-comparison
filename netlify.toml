@@ -1,0 +1,12 @@
+# The Next.js app lives in frontend/.
+[build]
+  base = "frontend"
+  # Install locked deps first so the project's pinned Prisma CLI (v6) is used,
+  # rather than npx fetching an unrelated latest/prerelease version.
+  command = "npm ci && npm run prisma:generate && npm run build"
+  publish = ".next"
+
+# Next.js runtime: deploys SSR pages, API routes and middleware as
+# Netlify Functions / Edge Functions. Without it only static files ship.
+[[plugins]]
+  package = "@netlify/plugin-nextjs"

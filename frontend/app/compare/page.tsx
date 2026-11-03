@@ -11,6 +11,7 @@ import EqualizerBarsLoader from '@/components/loading/EqualizerBarsLoader';
 import AnimatedCircularPercentage from '@/components/results/AnimatedCircularPercentage';
 import AiDetectionModal from '@/components/comparison/AiDetectionModal';
 import { generatePdfComparisonReport } from '@/components/results/PdfReportGenerator';
+import { prepareImageForUpload, readJsonSafe } from '@/lib/prepareUpload';
 
 export default function ComparePage() {
   const router = useRouter();
@@ -91,8 +92,12 @@ export default function ComparePage() {
 
     // Form data
     const formData = new FormData();
-    formData.append('image1', image1);
-    formData.append('image2', image2);
+    const [upload1, upload2] = await Promise.all([
+      prepareImageForUpload(image1),
+      prepareImageForUpload(image2),
+    ]);
+    formData.append('image1', upload1);
+    formData.append('image2', upload2);
     formData.append('consentGiven', savePhotosConsent ? 'true' : 'false');
 
     // Stage progression timer
@@ -106,7 +111,7 @@ export default function ComparePage() {
         body: formData,
       });
 
-      const json = await res.json();
+      const json = await readJsonSafe(res);
       clearInterval(stageTimer);
 
       if (!res.ok) {

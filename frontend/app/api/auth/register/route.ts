@@ -66,7 +66,14 @@ export async function POST(req: NextRequest) {
 
     if (authError) {
       let friendlyMessage = authError.message;
-      if (authError.message.toLowerCase().includes('user already registered') || authError.message.toLowerCase().includes('already registered')) {
+      if (
+        authError.message.toLowerCase().includes('email rate limit') ||
+        authError.message.toLowerCase().includes('rate limit exceeded') ||
+        authError.message.toLowerCase().includes('too many requests')
+      ) {
+        friendlyMessage =
+          'Too many sign-up attempts from this device. Please wait a few minutes and try again, or contact support.';
+      } else if (authError.message.toLowerCase().includes('user already registered') || authError.message.toLowerCase().includes('already registered')) {
         friendlyMessage = 'An account with this email address already exists. Please log in instead.';
       }
       return NextResponse.json(
@@ -118,7 +125,9 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      message: 'Account created successfully! You may now sign in.',
+      message: authData.user?.email_confirmed_at
+        ? 'Account created successfully! You may now sign in.'
+        : 'Account created! You can sign in now. If you need to verify your email, check your inbox (it may take a few minutes).',
       user: {
         id: userId,
         email: cleanEmail,

@@ -59,7 +59,7 @@ export default function LoginPage() {
         }
       } else {
         setResendSuccess(data.message || 'Verification email resent.');
-        startCooldownTimer(data.cooldownSeconds || 60);
+        startCooldownTimer(data.cooldownSeconds || 120);
       }
     } catch {
       setIsResending(false);

@@ -8,7 +8,7 @@ const resendSchema = z.object({
 
 // In-memory rate-limiter: store last email request timestamp per IP/email
 const rateLimitMap = new Map<string, number>();
-const COOLDOWN_SECONDS = 60;
+const COOLDOWN_SECONDS = 120; // 2 minutes — stays well under Supabase's 2/hr free tier limit
 
 export async function POST(req: NextRequest) {
   try {
@@ -59,11 +59,20 @@ export async function POST(req: NextRequest) {
 
     if (resendError) {
       console.warn('[Supabase Resend Notice]:', resendError.message);
-      if (resendError.message.toLowerCase().includes('rate limit')) {
+      if (
+        resendError.message.toLowerCase().includes('rate limit') ||
+        resendError.message.toLowerCase().includes('too many') ||
+        resendError.message.toLowerCase().includes('over_email_send_rate_limit')
+      ) {
+        // Mark a long cooldown so the UI doesn't let them retry immediately
+        rateLimitMap.set(rateLimitKey, Date.now() + 1000 * 60 * 58); // block for ~58 more minutes
         return NextResponse.json(
           {
             success: false,
-            message: 'Email rate limit reached on Supabase. Please wait a few minutes or verify with custom SMTP.',
+            code: 'SUPABASE_RATE_LIMIT',
+            message:
+              'Email sending limit reached for this hour. This is a Supabase free-tier limit (2 emails/hr). Please wait 1 hour, or ask support to disable email confirmation so you can sign in immediately.',
+            remainingSeconds: 3540, // ~59 min
           },
           { status: 429 }
         );

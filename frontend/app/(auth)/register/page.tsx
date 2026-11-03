@@ -58,7 +58,7 @@ export default function RegisterPage() {
         }
       } else {
         setRegistrationSuccess('Verification email sent again. Please check your inbox.');
-        startCooldownTimer(data.cooldownSeconds || 60);
+        startCooldownTimer(data.cooldownSeconds || 120);
       }
     } catch {
       setIsResending(false);
@@ -115,9 +115,9 @@ export default function RegisterPage() {
       // Success
       setRegisteredEmail(cleanEmail);
       setRegistrationSuccess(
-        data.message || 'Account created successfully! If email verification is enabled, please check your inbox.'
+        data.message || 'Account created! You can sign in now. Check your inbox if email verification is required.'
       );
-      startCooldownTimer(60);
+      startCooldownTimer(120); // 2 min cooldown matching server-side limit
     } catch {
       setIsLoading(false);
       setErrorMessage('A network error occurred. Please check your connection.');

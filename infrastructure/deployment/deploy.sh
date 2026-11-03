@@ -50,3 +50,4 @@ echo " AI Engine:  http://localhost:8000"
 echo " AI Health:  http://localhost:8000/api/v1/health"
 echo " Pre-seeded Super Admin: superadmin@facialsimilarity.ai / SuperAdmin123!"
 echo "========================================================================"
+

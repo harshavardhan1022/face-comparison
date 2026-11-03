@@ -152,3 +152,4 @@ docker exec -t face-similarity-db pg_dump -U postgres facesimilarity > backup_$(
 ```bash
 cat backup_file.sql | docker exec -i face-similarity-db psql -U postgres -d facesimilarity
 ```
+

@@ -37,3 +37,4 @@ Write-Host " Web Portal:  http://localhost:3000" -ForegroundColor White
 Write-Host " AI Service:  http://localhost:8000" -ForegroundColor White
 Write-Host " Super Admin: superadmin@facialsimilarity.ai / SuperAdmin123!" -ForegroundColor White
 Write-Host "========================================================================" -ForegroundColor Cyan
+

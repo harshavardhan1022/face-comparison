@@ -31,7 +31,27 @@ export async function POST(req: NextRequest) {
     const { name, email, password } = result.data;
     const cleanEmail = email.trim().toLowerCase();
 
-    const supabase = await createClient();
+    // Check configuration upfront
+    if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY) {
+      console.error('[Supabase Auth] Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY');
+      return NextResponse.json(
+        {
+          success: false,
+          message: 'Authentication service configuration is missing. Please verify Supabase environment variables.',
+        },
+        { status: 500 }
+      );
+    }
+
+    let supabase;
+    try {
+      supabase = await createClient();
+    } catch (clientErr: any) {
+      return NextResponse.json(
+        { success: false, message: clientErr.message || 'Unable to connect to authentication service.' },
+        { status: 500 }
+      );
+    }
 
     // 1. Sign up through Supabase Auth
     const { data: authData, error: authError } = await supabase.auth.signUp({
@@ -45,54 +65,60 @@ export async function POST(req: NextRequest) {
     });
 
     if (authError) {
+      let friendlyMessage = authError.message;
+      if (authError.message.toLowerCase().includes('user already registered') || authError.message.toLowerCase().includes('already registered')) {
+        friendlyMessage = 'An account with this email address already exists. Please log in instead.';
+      }
       return NextResponse.json(
-        { success: false, message: authError.message },
+        { success: false, message: friendlyMessage },
         { status: 400 }
       );
     }
 
     if (!authData.user) {
       return NextResponse.json(
-        { success: false, message: 'Registration failed. Please try again.' },
+        { success: false, message: 'Registration could not be completed. Please try again.' },
         { status: 500 }
       );
     }
 
     const userId = authData.user.id;
 
-    // 2. Ensure profile and default 'user' role exist via admin client (if triggers didn't run)
+    // 2. Ensure profile and default 'user' role exist via admin client
     try {
-      const adminClient = createAdminClient();
-      await adminClient.from('profiles').upsert({
-        id: userId,
-        full_name: name.trim(),
-        status: 'active',
-      });
+      if (process.env.SUPABASE_SECRET_KEY) {
+        const adminClient = createAdminClient();
+        await adminClient.from('profiles').upsert({
+          id: userId,
+          full_name: name.trim(),
+          status: 'active',
+        });
 
-      await adminClient.from('user_roles').upsert({
-        user_id: userId,
-        role: 'user',
-      });
+        await adminClient.from('user_roles').upsert({
+          user_id: userId,
+          role: 'user',
+        });
 
-      await adminClient.from('audit_logs').insert({
-        actor_id: userId,
-        action: 'USER_REGISTRATION',
-        event_type: 'AUTH',
-        severity: 'INFO',
-        ip_address: req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || '127.0.0.1',
-        user_agent: req.headers.get('user-agent') || 'Browser',
-        metadata: {
-          email: cleanEmail,
-          name: name.trim(),
-        },
-      });
+        await adminClient.from('audit_logs').insert({
+          actor_id: userId,
+          action: 'USER_REGISTRATION',
+          event_type: 'AUTH',
+          severity: 'INFO',
+          ip_address: req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || '127.0.0.1',
+          user_agent: req.headers.get('user-agent') || 'Browser',
+          metadata: {
+            email: cleanEmail,
+            name: name.trim(),
+          },
+        });
+      }
     } catch (dbErr) {
-      console.warn('Profile/role sync note:', dbErr);
+      console.warn('[Supabase Auth] Profile/role sync notice:', dbErr);
     }
 
     return NextResponse.json({
       success: true,
-      message: 'Account created successfully! Please check your email if confirmation is required.',
+      message: 'Account created successfully! You may now sign in.',
       user: {
         id: userId,
         email: cleanEmail,
@@ -105,7 +131,7 @@ export async function POST(req: NextRequest) {
   } catch (err: any) {
     console.error('Supabase Registration API Error:', err);
     return NextResponse.json(
-      { success: false, message: 'An unexpected error occurred during registration.' },
+      { success: false, message: err.message || 'An unexpected error occurred during registration.' },
       { status: 500 }
     );
   }

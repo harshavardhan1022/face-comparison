@@ -25,7 +25,28 @@ export async function POST(req: NextRequest) {
     const { email, password, isAdminPortal } = result.data;
     const cleanEmail = email.trim().toLowerCase();
 
-    const supabase = await createClient();
+    // Check configuration upfront
+    if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY) {
+      console.error('[Supabase Auth] Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY');
+      return NextResponse.json(
+        {
+          success: false,
+          message: 'Authentication service configuration is missing. Please verify Supabase environment variables.',
+        },
+        { status: 500 }
+      );
+    }
+
+    let supabase;
+    try {
+      supabase = await createClient();
+    } catch (clientErr: any) {
+      console.error('[Supabase Auth] Client creation error:', clientErr.message);
+      return NextResponse.json(
+        { success: false, message: clientErr.message || 'Unable to connect to authentication service.' },
+        { status: 500 }
+      );
+    }
 
     // Authenticate with Supabase Auth
     const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
@@ -34,8 +55,21 @@ export async function POST(req: NextRequest) {
     });
 
     if (authError || !authData.user) {
+      let friendlyMessage = 'Invalid email or password combination.';
+      if (authError) {
+        if (authError.message.toLowerCase().includes('email not confirmed')) {
+          friendlyMessage = 'Please verify your email address before logging in.';
+        } else if (authError.message.toLowerCase().includes('invalid login credentials')) {
+          friendlyMessage = 'Invalid email or password combination.';
+        } else if (authError.message.toLowerCase().includes('rate limit')) {
+          friendlyMessage = 'Too many failed login attempts. Please wait a few moments and try again.';
+        } else {
+          friendlyMessage = authError.message;
+        }
+      }
+
       return NextResponse.json(
-        { success: false, message: authError?.message || 'Invalid email or password combination.' },
+        { success: false, message: friendlyMessage },
         { status: 401 }
       );
     }
@@ -75,24 +109,26 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Log login audit event using admin client
+    // Log login audit event using admin client (graceful fallback)
     try {
-      const adminClient = createAdminClient();
-      await adminClient.from('audit_logs').insert({
-        actor_id: userId,
-        action: isAdminPortal ? 'ADMIN_LOGIN' : 'USER_LOGIN',
-        event_type: 'AUTH',
-        severity: 'INFO',
-        ip_address: req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || '127.0.0.1',
-        user_agent: req.headers.get('user-agent') || 'Browser',
-        metadata: {
-          email: cleanEmail,
-          role,
-          portal: isAdminPortal ? 'admin' : 'user',
-        },
-      });
+      if (process.env.SUPABASE_SECRET_KEY) {
+        const adminClient = createAdminClient();
+        await adminClient.from('audit_logs').insert({
+          actor_id: userId,
+          action: isAdminPortal ? 'ADMIN_LOGIN' : 'USER_LOGIN',
+          event_type: 'AUTH',
+          severity: 'INFO',
+          ip_address: req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || '127.0.0.1',
+          user_agent: req.headers.get('user-agent') || 'Browser',
+          metadata: {
+            email: cleanEmail,
+            role,
+            portal: isAdminPortal ? 'admin' : 'user',
+          },
+        });
+      }
     } catch (auditErr) {
-      console.warn('Failed to insert audit log:', auditErr);
+      console.warn('[Supabase Auth] Non-fatal audit log notice:', auditErr);
     }
 
     return NextResponse.json({
@@ -110,7 +146,7 @@ export async function POST(req: NextRequest) {
   } catch (err: any) {
     console.error('Supabase Login API Error:', err);
     return NextResponse.json(
-      { success: false, message: 'An unexpected authentication error occurred.' },
+      { success: false, message: err.message || 'An unexpected authentication error occurred.' },
       { status: 500 }
     );
   }

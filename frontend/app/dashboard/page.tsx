@@ -172,7 +172,8 @@ function DashboardContent() {
       setLoadingStage(5);
       setTimeout(() => {
         setIsProcessing(false);
-        setComparisonResult(data.data);
+        const result = data.data || data;
+        setComparisonResult(result);
         loadHistory();
       }, 700);
 
@@ -566,49 +567,49 @@ function DashboardContent() {
                     <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
                       <div className="lg:col-span-5 flex flex-col items-center justify-center border-b lg:border-b-0 lg:border-r border-white/10 pb-6 lg:pb-0 lg:pr-6">
                         <AnimatedCircularPercentage
-                          score={comparisonResult.similarity_score}
-                          category={comparisonResult.similarity_category}
+                          score={comparisonResult.similarityScore ?? comparisonResult.similarity_score ?? 0}
+                          category={comparisonResult.similarityCategory ?? comparisonResult.similarity_category ?? 'Inconclusive'}
                           size={260}
                         />
                         <div className="text-center mt-2 text-xs text-white/45 font-mono">
-                          Raw Cosine: {comparisonResult.raw_cosine_similarity?.toFixed(4)}
+                          Raw Cosine: {(comparisonResult.rawCosineScore ?? comparisonResult.raw_cosine_similarity ?? 0)?.toFixed(4)}
                         </div>
                       </div>
 
                       <div className="lg:col-span-7 space-y-4">
                         <div className="flex items-center gap-3">
-                          {preview1 && (
-                            <img src={preview1} alt="P1" className="w-20 h-20 rounded-xl object-cover border border-white/20" />
+                          {(comparisonResult.photo1Url || preview1) && (
+                            <img src={comparisonResult.photo1Url || preview1} alt="P1" className="w-20 h-20 rounded-xl object-cover border border-white/20" />
                           )}
                           <span className="text-white/40 text-xs">vs</span>
-                          {preview2 && (
-                            <img src={preview2} alt="P2" className="w-20 h-20 rounded-xl object-cover border border-white/20" />
+                          {(comparisonResult.photo2Url || preview2) && (
+                            <img src={comparisonResult.photo2Url || preview2} alt="P2" className="w-20 h-20 rounded-xl object-cover border border-white/20" />
                           )}
                           <div className="pl-2">
                             <span className="text-xs text-emerald-400 font-medium block">Validated Authentic</span>
-                            <span className="text-[11px] text-white/50">{comparisonResult.model_version}</span>
+                            <span className="text-[11px] text-white/50">{comparisonResult.modelVersion ?? comparisonResult.model_version ?? 'SFace / YuNet'}</span>
                           </div>
                         </div>
 
                         <div className="p-4 rounded-xl bg-white/[0.03] border border-white/10 text-xs text-white/80 leading-relaxed">
-                          {comparisonResult.calibrated_explanation}
+                          {comparisonResult.explanation ?? comparisonResult.calibrated_explanation ?? 'Facial similarity calculation complete.'}
                         </div>
 
                         <div className="flex flex-wrap gap-3 pt-2">
                           <button
                             onClick={() => {
                               generatePdfComparisonReport({
-                                id: comparisonResult.id,
-                                similarityScore: comparisonResult.similarity_score,
-                                rawCosineScore: comparisonResult.raw_cosine_similarity,
-                                similarityCategory: comparisonResult.similarity_category,
-                                modelVersion: comparisonResult.model_version,
+                                id: comparisonResult.comparisonId || comparisonResult.id || `SIM-${Date.now()}`,
+                                similarityScore: comparisonResult.similarityScore ?? comparisonResult.similarity_score ?? 0,
+                                rawCosineScore: comparisonResult.rawCosineScore ?? comparisonResult.raw_cosine_similarity ?? 0,
+                                similarityCategory: comparisonResult.similarityCategory ?? comparisonResult.similarity_category ?? 'Inconclusive',
+                                modelVersion: comparisonResult.modelVersion ?? comparisonResult.model_version ?? 'SFace / YuNet',
                                 imageQuality: 'Optimal',
                                 createdAt: comparisonResult.createdAt || new Date().toISOString(),
-                                explanation: comparisonResult.calibrated_explanation,
+                                explanation: comparisonResult.explanation ?? comparisonResult.calibrated_explanation ?? '',
                                 userEmail: user?.email,
-                                photo1Base64: comparisonResult.photo1DataUrl,
-                                photo2Base64: comparisonResult.photo2DataUrl,
+                                photo1Base64: comparisonResult.photo1DataUrl || preview1 || undefined,
+                                photo2Base64: comparisonResult.photo2DataUrl || preview2 || undefined,
                               });
                             }}
                             className="px-6 py-2.5 rounded-full text-xs font-semibold tracking-wider uppercase bg-cyan-500/20 text-cyan-200 border border-cyan-500/30 hover:bg-cyan-500/30 transition-colors flex items-center gap-2"

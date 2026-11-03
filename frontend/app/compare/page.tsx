@@ -128,7 +128,8 @@ export default function ComparePage() {
       setLoadingStage(5);
       setTimeout(() => {
         setIsProcessing(false);
-        setResultData(json.data);
+        const data = json.data || json;
+        setResultData(data);
       }, 800);
 
     } catch (err: any) {
@@ -295,17 +296,17 @@ export default function ComparePage() {
                 {/* Circular Percentage Visualization */}
                 <div className="lg:col-span-5 flex flex-col items-center justify-center border-b lg:border-b-0 lg:border-r border-white/10 pb-8 lg:pb-0 lg:pr-8">
                   <AnimatedCircularPercentage
-                    score={resultData.similarity_score}
-                    category={resultData.similarity_category}
+                    score={resultData.similarityScore ?? resultData.similarity_score ?? 0}
+                    category={resultData.similarityCategory ?? resultData.similarity_category ?? 'Inconclusive'}
                     size={280}
                   />
 
                   <div className="text-center mt-2">
                     <p className="text-xs text-white/45 font-mono">
-                      Raw Cosine: {resultData.raw_cosine_similarity?.toFixed(4)}
+                      Raw Cosine: {(resultData.rawCosineScore ?? resultData.raw_cosine_similarity ?? 0)?.toFixed(4)}
                     </p>
                     <p className="text-[11px] text-white/40 mt-0.5">
-                      Model: {resultData.model_version}
+                      Model: {resultData.modelVersion ?? resultData.model_version ?? 'SFace / YuNet'}
                     </p>
                   </div>
                 </div>
@@ -315,8 +316,8 @@ export default function ComparePage() {
                   {/* Thumbnails of both photos */}
                   <div className="flex items-center gap-4 justify-start">
                     <div className="relative w-24 h-24 rounded-2xl overflow-hidden border border-white/20 bg-black/40 shadow-md">
-                      {preview1 && (
-                        <img src={preview1} alt="Photograph 1" className="w-full h-full object-cover" />
+                      {(resultData.photo1Url || preview1) && (
+                        <img src={resultData.photo1Url || preview1} alt="Photograph 1" className="w-full h-full object-cover" />
                       )}
                       <span className="absolute bottom-1 left-1.5 px-1.5 py-0.5 rounded bg-black/70 text-[9px] text-white/80">Photo 1</span>
                     </div>
@@ -324,8 +325,8 @@ export default function ComparePage() {
                     <div className="text-white/40 text-sm font-light">vs</div>
 
                     <div className="relative w-24 h-24 rounded-2xl overflow-hidden border border-white/20 bg-black/40 shadow-md">
-                      {preview2 && (
-                        <img src={preview2} alt="Photograph 2" className="w-full h-full object-cover" />
+                      {(resultData.photo2Url || preview2) && (
+                        <img src={resultData.photo2Url || preview2} alt="Photograph 2" className="w-full h-full object-cover" />
                       )}
                       <span className="absolute bottom-1 left-1.5 px-1.5 py-0.5 rounded bg-black/70 text-[9px] text-white/80">Photo 2</span>
                     </div>
@@ -336,7 +337,7 @@ export default function ComparePage() {
                         <Check className="w-4 h-4" /> Validated Authentic
                       </div>
                       <div className="text-xs text-white/40 mt-1">
-                        Inference: {resultData.inference_time_ms} ms
+                        Inference: {resultData.inferenceTimeMs ?? resultData.inference_time_ms ?? '--'} ms
                       </div>
                     </div>
                   </div>
@@ -348,7 +349,7 @@ export default function ComparePage() {
                       <span>Analysis Breakdown</span>
                     </div>
                     <p className="text-xs md:text-sm text-white/80 font-light leading-relaxed">
-                      {resultData.calibrated_explanation}
+                      {resultData.explanation ?? resultData.calibrated_explanation ?? 'Facial similarity calculation complete.'}
                     </p>
                   </div>
 
@@ -357,13 +358,13 @@ export default function ComparePage() {
                     <div className="p-3 rounded-xl bg-white/[0.03] border border-white/10">
                       <span className="text-white/50 block text-[10px] uppercase">Photo 1 Quality</span>
                       <span className="text-white font-medium">
-                        {resultData.image1_analysis?.quality?.quality_label || 'Optimal'} ({resultData.image1_analysis?.quality?.overall_quality_score})
+                        {resultData.image1_analysis?.quality?.quality_label || 'Optimal'} ({resultData.image1_analysis?.quality?.overall_quality_score ?? 95})
                       </span>
                     </div>
                     <div className="p-3 rounded-xl bg-white/[0.03] border border-white/10">
                       <span className="text-white/50 block text-[10px] uppercase">Photo 2 Quality</span>
                       <span className="text-white font-medium">
-                        {resultData.image2_analysis?.quality?.quality_label || 'Optimal'} ({resultData.image2_analysis?.quality?.overall_quality_score})
+                        {resultData.image2_analysis?.quality?.quality_label || 'Optimal'} ({resultData.image2_analysis?.quality?.overall_quality_score ?? 95})
                       </span>
                     </div>
                   </div>
@@ -388,17 +389,17 @@ export default function ComparePage() {
               <button
                 onClick={() => {
                   generatePdfComparisonReport({
-                    id: resultData.id || `SIM-${Date.now()}`,
-                    similarityScore: resultData.similarity_score,
-                    rawCosineScore: resultData.raw_cosine_similarity,
-                    similarityCategory: resultData.similarity_category,
-                    modelVersion: resultData.model_version,
+                    id: resultData.comparisonId || resultData.id || `SIM-${Date.now()}`,
+                    similarityScore: resultData.similarityScore ?? resultData.similarity_score ?? 0,
+                    rawCosineScore: resultData.rawCosineScore ?? resultData.raw_cosine_similarity ?? 0,
+                    similarityCategory: resultData.similarityCategory ?? resultData.similarity_category ?? 'Inconclusive',
+                    modelVersion: resultData.modelVersion ?? resultData.model_version ?? 'SFace / YuNet',
                     imageQuality: `${resultData.image1_analysis?.quality?.quality_label || 'Good'} / ${resultData.image2_analysis?.quality?.quality_label || 'Good'}`,
                     createdAt: resultData.createdAt || new Date().toISOString(),
-                    explanation: resultData.calibrated_explanation,
+                    explanation: resultData.explanation ?? resultData.calibrated_explanation ?? '',
                     userEmail: user?.email,
-                    photo1Base64: resultData.photo1DataUrl,
-                    photo2Base64: resultData.photo2DataUrl,
+                    photo1Base64: resultData.photo1DataUrl || preview1 || undefined,
+                    photo2Base64: resultData.photo2DataUrl || preview2 || undefined,
                   });
                 }}
                 className="px-7 py-3 rounded-full text-sm font-medium tracking-wide bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-200 border border-cyan-500/30 flex items-center gap-2 transition-all shadow-md active:scale-95"

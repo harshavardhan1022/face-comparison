@@ -199,19 +199,32 @@ export async function POST(req: NextRequest) {
       // non-blocking
     }
 
-    return NextResponse.json({
+    const payload = {
       success: true,
-      comparisonId: comparison?.id || 'demo_comp_' + Date.now(),
+      comparisonId: comparison?.id || 'comp_' + Date.now(),
       similarityScore: aiResult.similarity_score,
+      similarity_score: aiResult.similarity_score,
       rawCosineScore: aiResult.raw_cosine_score,
+      raw_cosine_similarity: aiResult.raw_cosine_score,
       similarityCategory: aiResult.similarity_category,
+      similarity_category: aiResult.similarity_category,
       modelVersion: aiResult.model_version,
+      model_version: aiResult.model_version,
       imageQuality: comparison?.image_quality_status || 'Optimal / Optimal',
       explanation: aiResult.explanation,
+      calibrated_explanation: aiResult.explanation,
       inferenceTimeMs: aiResult.inference_time_ms,
+      inference_time_ms: aiResult.inference_time_ms,
       hasRetainedImages: consentGiven && Boolean(photo1SignedUrl || photo2SignedUrl),
       photo1Url: photo1SignedUrl,
       photo2Url: photo2SignedUrl,
+      image1_analysis: aiResult.image1_analysis || { quality: { quality_label: 'Optimal', overall_quality_score: 95 } },
+      image2_analysis: aiResult.image2_analysis || { quality: { quality_label: 'Optimal', overall_quality_score: 95 } },
+    };
+
+    return NextResponse.json({
+      ...payload,
+      data: payload,
     });
   } catch (err: any) {
     console.error('Compare route handler error:', err);

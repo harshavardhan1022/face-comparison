@@ -409,3 +409,4 @@ CREATE POLICY "storage_delete_own_folder" ON storage.objects
         bucket_id = 'face-comparison-private'
         AND (storage.foldername(name))[1] = auth.uid()::text
     );
+

@@ -30,3 +30,4 @@ INSERT INTO public.model_evaluations (
     ),
     now()
 ) ON CONFLICT DO NOTHING;
+

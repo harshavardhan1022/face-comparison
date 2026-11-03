@@ -1,7 +1,7 @@
 # Multi-stage production Dockerfile for Next.js App Router
 FROM node:20-alpine AS base
 WORKDIR /app
-RUN apk add --no-cache libc6-compat
+RUN apk add --no-cache libc6-compat openssl curl
 
 FROM base AS deps
 COPY package.json package-lock.json* ./
@@ -9,13 +9,17 @@ COPY prisma ./prisma
 RUN npm ci
 
 FROM base AS builder
+WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-RUN npx prisma generate
+RUN mkdir -p public
 ENV NEXT_TELEMETRY_DISABLED=1
+ENV DATABASE_URL="file:./dev.db"
+RUN npx prisma generate
 RUN npm run build
 
 FROM base AS runner
+WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
@@ -23,15 +27,23 @@ ENV HOSTNAME="0.0.0.0"
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
 
+# Ensure public, uploads, and runtime dirs exist
+RUN mkdir -p /app/public /app/uploads_temp && chown -R nextjs:nodejs /app/uploads_temp
+
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder --chown=nextjs:nodejs /app/.next ./.next
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package.json ./package.json
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
 
 USER nextjs
 
 EXPOSE 3000
 
-CMD ["npm", "start"]
+HEALTHCHECK --interval=20s --timeout=5s --start-period=15s --retries=3 \
+  CMD curl -f http://localhost:3000/api/auth/me || exit 0
 
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
+CMD ["npm", "start"]

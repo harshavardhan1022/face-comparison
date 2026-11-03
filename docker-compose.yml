@@ -1,7 +1,7 @@
 version: '3.8'
 
 services:
-  # PostgreSQL Database
+  # PostgreSQL Production Database
   postgres:
     image: postgres:16-alpine
     container_name: face-similarity-db
@@ -22,7 +22,7 @@ services:
     networks:
       - internal-net
 
-  # Python FastAPI AI Inference Engine
+  # Python FastAPI AI Inference Engine (YuNet + SFace/ArcFace)
   ai-service:
     build:
       context: ./ai-service
@@ -43,7 +43,7 @@ services:
       timeout: 5s
       retries: 3
 
-  # Next.js Frontend Application
+  # Next.js 15 Full-Stack Frontend Application
   frontend:
     build:
       context: ./frontend
@@ -54,7 +54,7 @@ services:
       postgres:
         condition: service_healthy
       ai-service:
-        condition: service_started
+        condition: service_healthy
     environment:
       - NODE_ENV=production
       - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres_secure_pass_2026}@postgres:5432/${POSTGRES_DB:-facesimilarity}?schema=public
@@ -62,6 +62,7 @@ services:
       - ADMIN_REGISTRATION_SECRET=${ADMIN_REGISTRATION_SECRET:-admin-secret-provisioning-key-2026}
       - AI_SERVICE_INTERNAL_URL=http://ai-service:8000
       - NEXT_PUBLIC_AI_SERVICE_URL=http://localhost:8000
+      - MAX_UPLOAD_SIZE_MB=10
     ports:
       - "3000:3000"
     networks:
@@ -74,4 +75,3 @@ networks:
 volumes:
   postgres_data:
     driver: local
-

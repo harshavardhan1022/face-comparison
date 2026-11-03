@@ -17,6 +17,7 @@ import AnimatedCircularPercentage from '@/components/results/AnimatedCircularPer
 import AiDetectionModal from '@/components/comparison/AiDetectionModal';
 import LogoutAnimationModal from '@/components/auth/LogoutAnimationModal';
 import { generatePdfComparisonReport } from '@/components/results/PdfReportGenerator';
+import { prepareImageForUpload, readJsonSafe } from '@/lib/prepareUpload';
 
 type TabType = 'overview' | 'compare' | 'history' | 'profile' | 'security';
 
@@ -76,7 +77,7 @@ function DashboardContent() {
         router.push('/login');
         return;
       }
-      const data = await res.json();
+      const data = await readJsonSafe(res);
       setUser(data.user);
       setNameInput(data.user.name);
       loadHistory();
@@ -92,7 +93,7 @@ function DashboardContent() {
     try {
       const res = await fetch('/api/history');
       if (res.ok) {
-        const data = await res.json();
+        const data = await readJsonSafe(res);
         // API returns { success, data: [...], pagination: {...} }
         setHistoryList(data.data || data.history || []);
       }
@@ -138,8 +139,12 @@ function DashboardContent() {
     setLoadingStage(0);
 
     const formData = new FormData();
-    formData.append('image1', image1);
-    formData.append('image2', image2);
+    const [upload1, upload2] = await Promise.all([
+      prepareImageForUpload(image1),
+      prepareImageForUpload(image2),
+    ]);
+    formData.append('image1', upload1);
+    formData.append('image2', upload2);
     formData.append('consentGiven', savePhotosConsent ? 'true' : 'false');
 
     const stageInterval = setInterval(() => {
@@ -153,7 +158,7 @@ function DashboardContent() {
       });
 
       clearInterval(stageInterval);
-      const data = await res.json();
+      const data = await readJsonSafe(res);
 
       if (!res.ok) {
         setIsProcessing(false);
@@ -208,7 +213,7 @@ function DashboardContent() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: nameInput.trim() }),
       });
-      const data = await res.json();
+      const data = await readJsonSafe(res);
       if (res.ok) {
         setUser((prev: any) => ({ ...prev, name: data.user.name }));
         setIsEditingName(false);
@@ -246,7 +251,7 @@ function DashboardContent() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ currentPassword, newPassword }),
       });
-      const data = await res.json();
+      const data = await readJsonSafe(res);
       if (res.ok) {
         setCurrentPassword('');
         setNewPassword('');

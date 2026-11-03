@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { getRemoteAiServiceUrl } from '@/lib/face-engine/runner';
+import { engineHealth } from '@/lib/face-engine';
 
 export async function GET(req: NextRequest) {
   try {
@@ -50,11 +52,16 @@ export async function GET(req: NextRequest) {
     let aiServiceLatencyMs = 0;
     try {
       const start = Date.now();
-      const aiRes = await fetch(`${process.env.AI_SERVICE_INTERNAL_URL || 'http://127.0.0.1:8000'}/api/v1/health`, {
-        signal: AbortSignal.timeout(2000),
-      });
+      const remoteUrl = getRemoteAiServiceUrl();
+      if (remoteUrl) {
+        const aiRes = await fetch(`${remoteUrl}/api/v1/health`, { signal: AbortSignal.timeout(2000) });
+        if (!aiRes.ok) aiServiceStatus = 'degraded';
+      } else {
+        // Built-in engine: verify the ONNX models load.
+        const health = await engineHealth();
+        if (!health.ok) aiServiceStatus = 'offline';
+      }
       aiServiceLatencyMs = Date.now() - start;
-      if (!aiRes.ok) aiServiceStatus = 'degraded';
     } catch {
       aiServiceStatus = 'offline';
     }

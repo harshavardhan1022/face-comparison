@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ArrowRight, ShieldCheck } from 'lucide-react';
@@ -21,6 +21,15 @@ export default function LogoutAnimationModal({
   // Stages: 1 = Sphere, 2 = Orbit, 3 = Infinity, 4 = Confirmation
   const [stage, setStage] = useState<1 | 2 | 3 | 4>(1);
   const [countdown, setCountdown] = useState(4);
+
+  const handleRedirect = useCallback(() => {
+    if (onComplete) {
+      onComplete();
+    } else {
+      router.push(isAdmin ? '/admin/login' : '/login');
+      router.refresh();
+    }
+  }, [onComplete, isAdmin, router]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -46,31 +55,22 @@ export default function LogoutAnimationModal({
     };
   }, [isOpen]);
 
-  // Countdown timer in stage 4 for automatic redirect
+  // Countdown timer in stage 4
   useEffect(() => {
     if (stage !== 4) return;
     const interval = setInterval(() => {
-      setCountdown((prev) => {
-        if (prev <= 1) {
-          clearInterval(interval);
-          handleRedirect();
-          return 0;
-        }
-        return prev - 1;
-      });
+      setCountdown((prev) => Math.max(0, prev - 1));
     }, 1000);
 
     return () => clearInterval(interval);
   }, [stage]);
 
-  const handleRedirect = () => {
-    if (onComplete) {
-      onComplete();
-    } else {
-      router.push(isAdmin ? '/admin/login' : '/login');
-      router.refresh();
+  // Auto-redirect when countdown hits 0
+  useEffect(() => {
+    if (stage === 4 && countdown === 0) {
+      handleRedirect();
     }
-  };
+  }, [countdown, stage, handleRedirect]);
 
   if (!isOpen) return null;
 

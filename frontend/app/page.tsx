@@ -1,13 +1,19 @@
 import { redirect } from 'next/navigation';
-import { getSession } from '@/lib/auth';
+import { createClient } from '@/lib/supabase/server';
+
+export const dynamic = 'force-dynamic';
 
 export default async function HomePage() {
-  const session = await getSession();
-
-  if (session) {
-    redirect('/compare');
-  } else {
-    redirect('/login');
+  let loggedIn = false;
+  try {
+    const supabase = await createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    loggedIn = !!user;
+  } catch {
+    loggedIn = false;
   }
-}
 
+  redirect(loggedIn ? '/dashboard' : '/login');
+}

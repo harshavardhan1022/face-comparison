@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-import prisma from '@/lib/prisma';
-import { verifyPassword, signToken, setAuthCookie } from '@/lib/auth';
+import { createClient } from '@/lib/supabase/server';
+import { createAdminClient } from '@/lib/supabase/admin';
 
 const loginSchema = z.object({
   email: z.string().email('Please provide a valid email address'),
@@ -22,97 +22,96 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { email, password, rememberMe, isAdminPortal } = result.data;
-
-    // Normalize email
+    const { email, password, isAdminPortal } = result.data;
     const cleanEmail = email.trim().toLowerCase();
 
-    const user = await prisma.user.findUnique({
-      where: { email: cleanEmail },
+    const supabase = await createClient();
+
+    // Authenticate with Supabase Auth
+    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+      email: cleanEmail,
+      password,
     });
 
-    if (!user) {
+    if (authError || !authData.user) {
       return NextResponse.json(
-        { success: false, message: 'Invalid email or password combination.' },
+        { success: false, message: authError?.message || 'Invalid email or password combination.' },
         { status: 401 }
       );
     }
 
-    if (user.status !== 'ACTIVE') {
+    const userId = authData.user.id;
+
+    // Fetch user profile and roles from Supabase database
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (profile && profile.status === 'suspended') {
+      await supabase.auth.signOut();
       return NextResponse.json(
-        { success: false, message: 'Your account is suspended. Please contact an administrator.' },
+        { success: false, message: 'Your account has been suspended. Please contact an administrator.' },
         { status: 403 }
       );
     }
+
+    // Check user roles
+    const { data: roleRow } = await supabase
+      .from('user_roles')
+      .select('role')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    const role = roleRow?.role || 'user';
 
     // Role check for admin login route
-    if (isAdminPortal && user.role !== 'ADMIN' && user.role !== 'SUPER_ADMIN') {
+    if (isAdminPortal && role !== 'admin' && role !== 'super_admin') {
+      await supabase.auth.signOut();
       return NextResponse.json(
-        { success: false, message: 'Access denied: Administrative privileges required.' },
+        { success: false, message: 'Access denied: You do not have administrative privileges.' },
         { status: 403 }
       );
     }
 
-    const passwordValid = await verifyPassword(password, user.passwordHash);
-    if (!passwordValid) {
-      return NextResponse.json(
-        { success: false, message: 'Invalid email or password combination.' },
-        { status: 401 }
-      );
-    }
-
-    // Update lastLoginAt
+    // Log login audit event using admin client
     try {
-      await prisma.user.update({
-        where: { id: user.id },
-        data: { lastLoginAt: new Date() },
-      });
-    } catch (e) {
-      // Non-blocking
-    }
-
-    // Generate JWT
-    const token = signToken({
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      role: user.role as 'USER' | 'ADMIN' | 'SUPER_ADMIN',
-    }, rememberMe ? '30d' : '1d');
-
-    // Set HTTP-only Cookie
-    await setAuthCookie(token, rememberMe);
-
-    // Record Audit Log
-    try {
-      await prisma.auditLog.create({
-        data: {
-          userId: user.id,
-          action: isAdminPortal ? 'ADMIN_LOGIN' : 'USER_LOGIN',
-          eventType: 'AUTH',
-          ipAddress: req.headers.get('x-forwarded-for') || '127.0.0.1',
-          userAgent: req.headers.get('user-agent') || 'Unknown',
-          details: JSON.stringify({ email: user.email, role: user.role }),
+      const adminClient = createAdminClient();
+      await adminClient.from('audit_logs').insert({
+        actor_id: userId,
+        action: isAdminPortal ? 'ADMIN_LOGIN' : 'USER_LOGIN',
+        event_type: 'AUTH',
+        severity: 'INFO',
+        ip_address: req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || '127.0.0.1',
+        user_agent: req.headers.get('user-agent') || 'Browser',
+        metadata: {
+          email: cleanEmail,
+          role,
+          portal: isAdminPortal ? 'admin' : 'user',
         },
       });
     } catch (auditErr) {
-      console.warn('Audit log creation error:', auditErr);
+      console.warn('Failed to insert audit log:', auditErr);
     }
 
     return NextResponse.json({
       success: true,
+      message: 'Login successful.',
       user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
+        id: userId,
+        email: cleanEmail,
+        name: profile?.full_name || authData.user.user_metadata?.full_name || cleanEmail.split('@')[0],
+        role: role.toUpperCase(),
+        status: (profile?.status || 'active').toUpperCase(),
       },
+      redirectTo: isAdminPortal ? '/admin/dashboard' : '/dashboard',
     });
-  } catch (error) {
-    console.error('Login error:', error);
+  } catch (err: any) {
+    console.error('Supabase Login API Error:', err);
     return NextResponse.json(
-      { success: false, message: 'An internal server error occurred during login.' },
+      { success: false, message: 'An unexpected authentication error occurred.' },
       { status: 500 }
     );
   }
 }
-

@@ -1,180 +1,132 @@
 import { NextRequest, NextResponse } from 'next/server';
-import prisma from '@/lib/prisma';
-import { getSession } from '@/lib/auth';
+import { z } from 'zod';
+import { createClient } from '@/lib/supabase/server';
+import { createAdminClient } from '@/lib/supabase/admin';
 
 export async function GET(req: NextRequest) {
   try {
-    const session = await getSession();
-    if (!session || (session.role !== 'ADMIN' && session.role !== 'SUPER_ADMIN')) {
-      return NextResponse.json({ success: false, message: 'Forbidden: Admin access required' }, { status: 403 });
-    }
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
 
-    const { searchParams } = new URL(req.url);
-    const search = searchParams.get('search')?.trim().toLowerCase() || '';
-    const roleFilter = searchParams.get('role');
-    const statusFilter = searchParams.get('status');
+    if (!user) return NextResponse.json({ success: false, message: 'Unauthorized' }, { status: 401 });
 
-    const whereClause: any = {};
+    const { data: roleRow } = await supabase
+      .from('user_roles')
+      .select('role')
+      .eq('user_id', user.id)
+      .in('role', ['admin', 'super_admin'])
+      .maybeSingle();
 
-    if (search) {
-      whereClause.OR = [
-        { name: { contains: search } },
-        { email: { contains: search } },
-      ];
-    }
+    if (!roleRow) return NextResponse.json({ success: false, message: 'Forbidden' }, { status: 403 });
 
-    if (roleFilter && ['USER', 'ADMIN', 'SUPER_ADMIN'].includes(roleFilter)) {
-      whereClause.role = roleFilter;
-    }
+    const adminClient = createAdminClient();
 
-    if (statusFilter && ['ACTIVE', 'INACTIVE', 'SUSPENDED'].includes(statusFilter)) {
-      whereClause.status = statusFilter;
-    }
+    // Fetch auth users from Supabase Auth
+    const { data: authUsers, error: authUsersErr } = await adminClient.auth.admin.listUsers();
+    if (authUsersErr) throw authUsersErr;
 
-    const users = await prisma.user.findMany({
-      where: whereClause,
-      orderBy: { createdAt: 'desc' },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        role: true,
-        status: true,
-        emailVerified: true,
-        lastLoginAt: true,
-        createdAt: true,
-        _count: { select: { comparisons: true } },
-      },
+    // Fetch profiles and user_roles
+    const [{ data: profiles }, { data: roles }] = await Promise.all([
+      adminClient.from('profiles').select('*'),
+      adminClient.from('user_roles').select('*'),
+    ]);
+
+    const profileMap = new Map((profiles || []).map((p) => [p.id, p]));
+    const roleMap = new Map((roles || []).map((r) => [r.user_id, r.role]));
+
+    const users = (authUsers.users || []).map((u) => {
+      const p = profileMap.get(u.id);
+      const r = roleMap.get(u.id) || 'user';
+      return {
+        id: u.id,
+        email: u.email,
+        name: p?.full_name || u.user_metadata?.full_name || u.email?.split('@')[0],
+        role: r.toUpperCase(),
+        status: (p?.status || 'active').toUpperCase(),
+        emailVerified: Boolean(u.email_confirmed_at),
+        createdAt: u.created_at,
+        lastSignInAt: u.last_sign_in_at,
+      };
     });
 
     return NextResponse.json({ success: true, users });
-  } catch (error) {
-    console.error('Admin users fetch error:', error);
-    return NextResponse.json({ success: false, message: 'Failed to fetch users' }, { status: 500 });
+  } catch (err: any) {
+    console.error('Admin users API error:', err);
+    return NextResponse.json({ success: false, message: 'Internal Server Error' }, { status: 500 });
   }
 }
 
+const updateStatusSchema = z.object({
+  userId: z.string().uuid(),
+  status: z.enum(['ACTIVE', 'INACTIVE', 'SUSPENDED']),
+  role: z.enum(['USER', 'ADMIN', 'SUPER_ADMIN']).optional(),
+});
+
 export async function PATCH(req: NextRequest) {
   try {
-    const session = await getSession();
-    if (!session || (session.role !== 'ADMIN' && session.role !== 'SUPER_ADMIN')) {
-      return NextResponse.json({ success: false, message: 'Forbidden: Admin access required' }, { status: 403 });
-    }
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+
+    if (!user) return NextResponse.json({ success: false, message: 'Unauthorized' }, { status: 401 });
+
+    const { data: callerRoleRow } = await supabase
+      .from('user_roles')
+      .select('role')
+      .eq('user_id', user.id)
+      .in('role', ['admin', 'super_admin'])
+      .maybeSingle();
+
+    if (!callerRoleRow) return NextResponse.json({ success: false, message: 'Forbidden' }, { status: 403 });
 
     const body = await req.json();
-    const { userId, status, role } = body;
-
-    if (!userId) {
-      return NextResponse.json({ success: false, message: 'Target userId is required' }, { status: 400 });
+    const result = updateStatusSchema.safeParse(body);
+    if (!result.success) {
+      return NextResponse.json({ success: false, message: result.error.errors[0].message }, { status: 400 });
     }
 
-    // Fetch existing target user
-    const targetUser = await prisma.user.findUnique({
-      where: { id: userId },
-    });
+    const { userId, status, role } = result.data;
 
-    if (!targetUser) {
-      return NextResponse.json({ success: false, message: 'User not found' }, { status: 404 });
+    // Self-suspension or demotion prevention
+    if (userId === user.id && status === 'SUSPENDED') {
+      return NextResponse.json({ success: false, message: 'Cannot suspend your own account.' }, { status: 400 });
     }
 
-    // RBAC Protections
-    const isActorSuperAdmin = session.role === 'SUPER_ADMIN';
-    const isTargetSelf = session.id === targetUser.id;
+    const adminClient = createAdminClient();
 
-    // 1. Prevent modifying a SUPER_ADMIN unless actor is also SUPER_ADMIN
-    if (targetUser.role === 'SUPER_ADMIN' && !isActorSuperAdmin) {
-      return NextResponse.json({
-        success: false,
-        message: 'Permission denied: Only Super Administrators can modify another Super Administrator.'
-      }, { status: 403 });
-    }
+    // Update profile status in Supabase
+    await adminClient
+      .from('profiles')
+      .update({ status: status.toLowerCase() as any })
+      .eq('id', userId);
 
-    // 2. Prevent self-lockout or self-demotion
-    if (isTargetSelf) {
-      if (status && status !== 'ACTIVE') {
-        return NextResponse.json({
-          success: false,
-          message: 'Safety rule: You cannot suspend or deactivate your own administrative account.'
-        }, { status: 400 });
-      }
-      if (role && role !== session.role) {
-        return NextResponse.json({
-          success: false,
-          message: 'Safety rule: You cannot demote or alter your own administrative role.'
-        }, { status: 400 });
-      }
-    }
-
-    // 3. Prevent non-super-admins from granting SUPER_ADMIN role
-    if (role === 'SUPER_ADMIN' && !isActorSuperAdmin) {
-      return NextResponse.json({
-        success: false,
-        message: 'Permission denied: Only Super Administrators can grant Super Administrator role.'
-      }, { status: 403 });
-    }
-
-    const updateData: any = {};
-    const auditActions: string[] = [];
-
-    if (status) {
-      if (!['ACTIVE', 'INACTIVE', 'SUSPENDED'].includes(status)) {
-        return NextResponse.json({ success: false, message: 'Invalid status value' }, { status: 400 });
-      }
-      updateData.status = status;
-      auditActions.push(`USER_STATUS_CHANGE_${targetUser.status}_TO_${status}`);
-    }
-
+    // Update role if requested
     if (role) {
-      if (!['USER', 'ADMIN', 'SUPER_ADMIN'].includes(role)) {
-        return NextResponse.json({ success: false, message: 'Invalid role value' }, { status: 400 });
+      if (callerRoleRow.role !== 'super_admin' && role === 'SUPER_ADMIN') {
+        return NextResponse.json({ success: false, message: 'Only super administrators can assign SUPER_ADMIN.' }, { status: 403 });
       }
-      updateData.role = role;
-      auditActions.push(`USER_ROLE_CHANGE_${targetUser.role}_TO_${role}`);
+
+      await adminClient
+        .from('user_roles')
+        .upsert({
+          user_id: userId,
+          role: role.toLowerCase() as any,
+          assigned_by: user.id,
+        });
     }
 
-    if (Object.keys(updateData).length === 0) {
-      return NextResponse.json({ success: false, message: 'No valid fields provided for update' }, { status: 400 });
-    }
-
-    const updated = await prisma.user.update({
-      where: { id: userId },
-      data: updateData,
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        role: true,
-        status: true,
-        lastLoginAt: true,
-        createdAt: true,
-      },
+    // Audit log
+    await adminClient.from('audit_logs').insert({
+      actor_id: user.id,
+      action: 'ADMIN_USER_UPDATED',
+      event_type: 'ADMIN',
+      severity: 'WARNING',
+      target_reference: userId,
+      metadata: { new_status: status, new_role: role },
     });
 
-    // Record Audit Logs
-    for (const action of auditActions) {
-      await prisma.auditLog.create({
-        data: {
-          userId: session.id,
-          action,
-          eventType: 'ADMIN',
-          severity: role ? 'WARN' : 'INFO',
-          status: 'SUCCESS',
-          details: JSON.stringify({
-            targetUserId: targetUser.id,
-            targetEmail: targetUser.email,
-            previousRole: targetUser.role,
-            newRole: updated.role,
-            previousStatus: targetUser.status,
-            newStatus: updated.status,
-            actorEmail: session.email,
-          }),
-        },
-      });
-    }
-
-    return NextResponse.json({ success: true, user: updated });
-  } catch (error) {
-    console.error('Admin user update error:', error);
-    return NextResponse.json({ success: false, message: 'Failed to update user' }, { status: 500 });
+    return NextResponse.json({ success: true, message: 'User updated successfully.' });
+  } catch (err: any) {
+    console.error('Update user API error:', err);
+    return NextResponse.json({ success: false, message: 'Internal Server Error' }, { status: 500 });
   }
 }

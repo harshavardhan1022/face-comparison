@@ -1,87 +1,66 @@
 import { NextRequest, NextResponse } from 'next/server';
-import crypto from 'crypto';
-import prisma from '@/lib/prisma';
-import { sendPasswordResetEmail } from '@/lib/email';
+import { z } from 'zod';
+import { createClient } from '@/lib/supabase/server';
+import { createAdminClient } from '@/lib/supabase/admin';
+
+const forgotPasswordSchema = z.object({
+  email: z.string().email('Please enter a valid email address'),
+});
 
 export async function POST(req: NextRequest) {
   try {
-    const { email } = await req.json();
+    const body = await req.json();
+    const result = forgotPasswordSchema.safeParse(body);
 
-    if (!email || typeof email !== 'string') {
+    if (!result.success) {
       return NextResponse.json(
-        { success: false, message: 'Please provide a valid email address.' },
+        { success: false, message: result.error.errors[0].message },
         { status: 400 }
       );
     }
 
+    const { email } = result.data;
     const cleanEmail = email.trim().toLowerCase();
-    const user = await prisma.user.findUnique({
-      where: { email: cleanEmail },
+
+    const supabase = await createClient();
+
+    // Determine application origin for secure recovery callback redirect
+    const origin = req.headers.get('origin') || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+    const redirectTo = `${origin}/reset-password`;
+
+    // Trigger Supabase Auth password recovery workflow (PKCE & secure link)
+    const { error: resetError } = await supabase.auth.resetPasswordForEmail(cleanEmail, {
+      redirectTo,
     });
 
-    // Neutral message preventing account enumeration
-    const neutralResponse = {
-      success: true,
-      message: 'If an account exists for this email, a password-reset link has been dispatched.',
-    };
-
-    if (!user) {
-      return NextResponse.json(neutralResponse);
+    if (resetError) {
+      console.warn('Supabase resetPasswordForEmail notice:', resetError.message);
     }
 
-    // Invalidate existing unused tokens for this user
-    await prisma.passwordResetToken.deleteMany({
-      where: { userId: user.id, usedAt: null },
-    });
-
-    // Generate 32-byte cryptographically secure random token
-    const rawToken = crypto.randomBytes(32).toString('hex');
-    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
-    const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour expiration
-
-    // Store hash in DB
-    await prisma.passwordResetToken.create({
-      data: {
-        userId: user.id,
-        tokenHash,
-        expiresAt,
-      },
-    });
-
-    // Dispatch email
-    const appBaseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
-    const resetLink = `${appBaseUrl}/reset-password?token=${rawToken}`;
-
-    await sendPasswordResetEmail({
-      toEmail: user.email,
-      userName: user.name,
-      resetLink,
-    });
-
-    // Record audit log
+    // Security practice: Always return generic success to prevent email enumeration
     try {
-      await prisma.auditLog.create({
-        data: {
-          userId: user.id,
-          action: 'PASSWORD_RESET_REQUESTED',
-          eventType: 'SECURITY',
-          severity: 'INFO',
-          ipAddress: req.headers.get('x-forwarded-for') || '127.0.0.1',
-          userAgent: req.headers.get('user-agent') || 'Unknown',
-          details: JSON.stringify({ email: user.email }),
-        },
+      const adminClient = createAdminClient();
+      await adminClient.from('audit_logs').insert({
+        action: 'PASSWORD_RESET_REQUESTED',
+        event_type: 'AUTH',
+        severity: 'INFO',
+        ip_address: req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || '127.0.0.1',
+        user_agent: req.headers.get('user-agent') || 'Browser',
+        metadata: { email: cleanEmail },
       });
     } catch (e) {
-      // Non-blocking
+      // non-blocking
     }
 
-    return NextResponse.json(neutralResponse);
-  } catch (error) {
-    console.error('Forgot password error:', error);
+    return NextResponse.json({
+      success: true,
+      message: 'If an account exists with this email address, a password reset link has been dispatched.',
+    });
+  } catch (err: any) {
+    console.error('Forgot password API Error:', err);
     return NextResponse.json(
-      { success: false, message: 'An internal error occurred while processing your request.' },
+      { success: false, message: 'An unexpected error occurred while initiating password reset.' },
       { status: 500 }
     );
   }
 }
-

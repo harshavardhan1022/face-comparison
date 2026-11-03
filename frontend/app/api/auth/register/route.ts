@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-import prisma from '@/lib/prisma';
-import { hashPassword, signToken, setAuthCookie } from '@/lib/auth';
+import { createClient } from '@/lib/supabase/server';
+import { createAdminClient } from '@/lib/supabase/admin';
 
 const registerSchema = z.object({
   name: z.string().min(2, 'Full name must be at least 2 characters'),
@@ -9,11 +9,11 @@ const registerSchema = z.object({
   password: z.string().min(8, 'Password must be at least 8 characters'),
   confirmPassword: z.string(),
   termsAccepted: z.boolean().refine((val) => val === true, {
-    message: 'You must accept the terms of service and privacy policy',
+    message: 'You must accept the terms of service and biometric privacy policy',
   }),
 }).refine((data) => data.password === data.confirmPassword, {
-  message: "Passwords do not match",
-  path: ["confirmPassword"],
+  message: 'Passwords do not match',
+  path: ['confirmPassword'],
 });
 
 export async function POST(req: NextRequest) {
@@ -31,74 +31,82 @@ export async function POST(req: NextRequest) {
     const { name, email, password } = result.data;
     const cleanEmail = email.trim().toLowerCase();
 
-    // Check existing
-    const existing = await prisma.user.findUnique({
-      where: { email: cleanEmail },
-    });
+    const supabase = await createClient();
 
-    if (existing) {
-      return NextResponse.json(
-        { success: false, message: 'An account with this email address already exists.' },
-        { status: 409 }
-      );
-    }
-
-    const passwordHash = await hashPassword(password);
-
-    // Create user (strictly USER role for public registrations)
-    const newUser = await prisma.user.create({
-      data: {
-        name: name.trim(),
-        email: cleanEmail,
-        passwordHash,
-        role: 'USER',
-        status: 'ACTIVE',
-        emailVerified: true,
+    // 1. Sign up through Supabase Auth
+    const { data: authData, error: authError } = await supabase.auth.signUp({
+      email: cleanEmail,
+      password,
+      options: {
+        data: {
+          full_name: name.trim(),
+        },
       },
     });
 
-    // Generate JWT
-    const token = signToken({
-      id: newUser.id,
-      email: newUser.email,
-      name: newUser.name,
-      role: 'USER',
-    });
+    if (authError) {
+      return NextResponse.json(
+        { success: false, message: authError.message },
+        { status: 400 }
+      );
+    }
 
-    // Set HTTP-only Cookie
-    await setAuthCookie(token, true);
+    if (!authData.user) {
+      return NextResponse.json(
+        { success: false, message: 'Registration failed. Please try again.' },
+        { status: 500 }
+      );
+    }
 
-    // Record Audit Log
+    const userId = authData.user.id;
+
+    // 2. Ensure profile and default 'user' role exist via admin client (if triggers didn't run)
     try {
-      await prisma.auditLog.create({
-        data: {
-          userId: newUser.id,
-          action: 'USER_REGISTRATION',
-          eventType: 'AUTH',
-          ipAddress: req.headers.get('x-forwarded-for') || '127.0.0.1',
-          userAgent: req.headers.get('user-agent') || 'Unknown',
-          details: JSON.stringify({ email: newUser.email }),
+      const adminClient = createAdminClient();
+      await adminClient.from('profiles').upsert({
+        id: userId,
+        full_name: name.trim(),
+        status: 'active',
+      });
+
+      await adminClient.from('user_roles').upsert({
+        user_id: userId,
+        role: 'user',
+      });
+
+      await adminClient.from('audit_logs').insert({
+        actor_id: userId,
+        action: 'USER_REGISTRATION',
+        event_type: 'AUTH',
+        severity: 'INFO',
+        ip_address: req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || '127.0.0.1',
+        user_agent: req.headers.get('user-agent') || 'Browser',
+        metadata: {
+          email: cleanEmail,
+          name: name.trim(),
         },
       });
-    } catch (auditErr) {
-      console.warn('Audit log creation error:', auditErr);
+    } catch (dbErr) {
+      console.warn('Profile/role sync note:', dbErr);
     }
 
     return NextResponse.json({
       success: true,
+      message: 'Account created successfully! Please check your email if confirmation is required.',
       user: {
-        id: newUser.id,
-        name: newUser.name,
-        email: newUser.email,
-        role: newUser.role,
+        id: userId,
+        email: cleanEmail,
+        name: name.trim(),
+        role: 'USER',
+        status: 'ACTIVE',
       },
-    }, { status: 201 });
-  } catch (error) {
-    console.error('Registration error:', error);
+      redirectTo: '/dashboard',
+    });
+  } catch (err: any) {
+    console.error('Supabase Registration API Error:', err);
     return NextResponse.json(
-      { success: false, message: 'An error occurred during account registration.' },
+      { success: false, message: 'An unexpected error occurred during registration.' },
       { status: 500 }
     );
   }
 }
-

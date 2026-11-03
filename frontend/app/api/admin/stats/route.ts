@@ -1,73 +1,84 @@
-import { NextResponse } from 'next/server';
-import prisma from '@/lib/prisma';
-import { getSession } from '@/lib/auth';
+import { NextRequest, NextResponse } from 'next/server';
+import { createClient } from '@/lib/supabase/server';
+import { createAdminClient } from '@/lib/supabase/admin';
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
-    const session = await getSession();
-    if (!session || (session.role !== 'ADMIN' && session.role !== 'SUPER_ADMIN')) {
-      return NextResponse.json({ success: false, message: 'Forbidden: Admin access required' }, { status: 403 });
+    const supabase = await createClient();
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+
+    if (authError || !user) {
+      return NextResponse.json({ success: false, message: 'Unauthorized' }, { status: 401 });
     }
 
+    const { data: roleRow } = await supabase
+      .from('user_roles')
+      .select('role')
+      .eq('user_id', user.id)
+      .in('role', ['admin', 'super_admin'])
+      .maybeSingle();
+
+    if (!roleRow) {
+      return NextResponse.json({ success: false, message: 'Forbidden' }, { status: 403 });
+    }
+
+    const adminClient = createAdminClient();
+
+    // Query real Supabase statistics
     const [
-      totalUsers,
-      activeUsers,
-      inactiveUsers,
-      suspendedUsers,
-      totalComparisons,
-      consentCount,
-      aiDetectedCount,
-      recentComparisons,
-      recentAuditLogs,
-      modelEvaluations,
+      { count: totalUsers },
+      { count: activeUsers },
+      { count: suspendedUsers },
+      { count: totalComparisons },
+      { count: completedComparisons },
+      { count: failedComparisons },
+      { count: totalJobs },
+      { count: queuedJobs },
     ] = await Promise.all([
-      prisma.user.count(),
-      prisma.user.count({ where: { status: 'ACTIVE' } }),
-      prisma.user.count({ where: { status: 'INACTIVE' } }),
-      prisma.user.count({ where: { status: 'SUSPENDED' } }),
-      prisma.comparison.count(),
-      prisma.comparison.count({ where: { consentGiven: true } }),
-      prisma.comparison.count({ where: { aiDetectionStatus: 'AI_DETECTED' } }),
-      prisma.comparison.findMany({
-        take: 10,
-        orderBy: { createdAt: 'desc' },
-        include: { user: { select: { email: true, name: true } } },
-      }),
-      prisma.auditLog.findMany({
-        take: 15,
-        orderBy: { createdAt: 'desc' },
-        include: { user: { select: { email: true } } },
-      }),
-      prisma.modelEvaluation.findMany({
-        take: 5,
-        orderBy: { evaluationDate: 'desc' },
-      }),
+      adminClient.from('profiles').select('*', { count: 'exact', head: true }),
+      adminClient.from('profiles').select('*', { count: 'exact', head: true }).eq('status', 'active'),
+      adminClient.from('profiles').select('*', { count: 'exact', head: true }).eq('status', 'suspended'),
+      adminClient.from('comparisons').select('*', { count: 'exact', head: true }),
+      adminClient.from('comparisons').select('*', { count: 'exact', head: true }).eq('processing_status', 'completed'),
+      adminClient.from('comparisons').select('*', { count: 'exact', head: true }).eq('processing_status', 'failed'),
+      adminClient.from('inference_jobs').select('*', { count: 'exact', head: true }),
+      adminClient.from('inference_jobs').select('*', { count: 'exact', head: true }).eq('job_status', 'queued'),
     ]);
 
-    // Average similarity calculation
-    const avgScoreResult = await prisma.comparison.aggregate({
-      _avg: { similarityScore: true },
-    });
-    const averageSimilarityScore = avgScoreResult._avg.similarityScore || 0;
+    // Check AI microservice health
+    let aiServiceStatus = 'operational';
+    let aiServiceLatencyMs = 0;
+    try {
+      const start = Date.now();
+      const aiRes = await fetch(`${process.env.AI_SERVICE_INTERNAL_URL || 'http://127.0.0.1:8000'}/api/v1/health`, {
+        signal: AbortSignal.timeout(2000),
+      });
+      aiServiceLatencyMs = Date.now() - start;
+      if (!aiRes.ok) aiServiceStatus = 'degraded';
+    } catch {
+      aiServiceStatus = 'offline';
+    }
 
     return NextResponse.json({
       success: true,
       stats: {
-        totalUsers,
-        activeUsers,
-        inactiveUsers,
-        suspendedUsers,
-        totalComparisons,
-        consentCount,
-        aiDetectedCount,
-        averageSimilarityScore: Math.round(averageSimilarityScore * 10) / 10,
+        totalUsers: totalUsers || 0,
+        activeUsers: activeUsers || 0,
+        inactiveUsers: (totalUsers || 0) - (activeUsers || 0),
+        suspendedUsers: suspendedUsers || 0,
+        totalComparisons: totalComparisons || 0,
+        successfulComparisons: completedComparisons || 0,
+        failedComparisons: failedComparisons || 0,
+        totalJobs: totalJobs || 0,
+        pendingJobs: queuedJobs || 0,
+        aiService: {
+          status: aiServiceStatus,
+          latencyMs: aiServiceLatencyMs,
+        },
       },
-      recentComparisons,
-      recentAuditLogs,
-      modelEvaluations,
     });
-  } catch (error) {
-    console.error('Admin stats error:', error);
-    return NextResponse.json({ success: false, message: 'Failed to fetch admin statistics' }, { status: 500 });
+  } catch (err: any) {
+    console.error('Admin stats API error:', err);
+    return NextResponse.json({ success: false, message: 'Internal Server Error' }, { status: 500 });
   }
 }

@@ -1,78 +1,91 @@
 import { NextRequest, NextResponse } from 'next/server';
-import prisma from '@/lib/prisma';
-import { getSession, verifyPassword, hashPassword, signToken, setAuthCookie } from '@/lib/auth';
+import { z } from 'zod';
+import { createClient } from '@/lib/supabase/server';
+import { createAdminClient } from '@/lib/supabase/admin';
 
-export async function PATCH(req: NextRequest) {
+const passwordSchema = z.object({
+  currentPassword: z.string().min(1, 'Current password is required'),
+  newPassword: z.string().min(8, 'New password must be at least 8 characters'),
+  confirmPassword: z.string(),
+}).refine((data) => data.newPassword === data.confirmPassword, {
+  message: 'New passwords do not match',
+  path: ['confirmPassword'],
+});
+
+export async function PUT(req: NextRequest) {
   try {
-    const session = await getSession();
-    if (!session) {
-      return NextResponse.json({ success: false, message: 'Unauthorized' }, { status: 401 });
+    const supabase = await createClient();
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+
+    if (authError || !user || !user.email) {
+      return NextResponse.json(
+        { success: false, message: 'Authentication required' },
+        { status: 401 }
+      );
     }
 
-    const { currentPassword, newPassword } = await req.json();
+    const body = await req.json();
+    const result = passwordSchema.safeParse(body);
 
-    if (!currentPassword || !newPassword || typeof newPassword !== 'string' || newPassword.length < 8) {
+    if (!result.success) {
       return NextResponse.json(
-        { success: false, message: 'New password must be at least 8 characters and current password is required.' },
+        { success: false, message: result.error.errors[0].message },
         { status: 400 }
       );
     }
 
-    const user = await prisma.user.findUnique({
-      where: { id: session.id },
-    });
+    const { currentPassword, newPassword } = result.data;
 
-    if (!user) {
-      return NextResponse.json({ success: false, message: 'User not found' }, { status: 404 });
-    }
-
-    // Verify current password
-    const isCurrentValid = await verifyPassword(currentPassword, user.passwordHash);
-    if (!isCurrentValid) {
-      return NextResponse.json(
-        { success: false, message: 'Incorrect current password. Please try again.' },
-        { status: 400 }
-      );
-    }
-
-    // Hash new password
-    const newPasswordHash = await hashPassword(newPassword);
-
-    // Update password
-    await prisma.user.update({
-      where: { id: session.id },
-      data: { passwordHash: newPasswordHash },
-    });
-
-    // Record audit log
-    await prisma.auditLog.create({
-      data: {
-        userId: session.id,
-        action: 'USER_PASSWORD_CHANGED',
-        eventType: 'SECURITY',
-        severity: 'INFO',
-        ipAddress: req.headers.get('x-forwarded-for') || '127.0.0.1',
-        userAgent: req.headers.get('user-agent') || 'Unknown',
-        details: JSON.stringify({ email: user.email }),
-      },
-    });
-
-    // Rotate session token
-    const newToken = signToken({
-      id: user.id,
+    // Verify current password by attempting to sign in
+    const { error: verifyError } = await supabase.auth.signInWithPassword({
       email: user.email,
-      name: user.name,
-      role: user.role as any,
+      password: currentPassword,
     });
-    await setAuthCookie(newToken, true);
+
+    if (verifyError) {
+      return NextResponse.json(
+        { success: false, message: 'Current password verification failed. Please enter your correct current password.' },
+        { status: 400 }
+      );
+    }
+
+    // Update password in Supabase Auth
+    const { error: updateError } = await supabase.auth.updateUser({
+      password: newPassword,
+    });
+
+    if (updateError) {
+      return NextResponse.json(
+        { success: false, message: updateError.message },
+        { status: 400 }
+      );
+    }
+
+    // Audit log
+    try {
+      const adminClient = createAdminClient();
+      await adminClient.from('audit_logs').insert({
+        actor_id: user.id,
+        action: 'PASSWORD_CHANGED',
+        event_type: 'SECURITY',
+        severity: 'INFO',
+        ip_address: req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || '127.0.0.1',
+        user_agent: req.headers.get('user-agent') || 'Browser',
+        metadata: { email: user.email },
+      });
+    } catch (e) {
+      // non-blocking
+    }
 
     return NextResponse.json({
       success: true,
-      message: 'Your password has been changed successfully.',
+      message: 'Password updated successfully.',
     });
-  } catch (error) {
-    console.error('Password change error:', error);
-    return NextResponse.json({ success: false, message: 'Failed to update password' }, { status: 500 });
+  } catch (err: any) {
+    console.error('Change password API error:', err);
+    return NextResponse.json(
+      { success: false, message: 'Internal Server Error' },
+      { status: 500 }
+    );
   }
 }
-

@@ -1,13 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
-import prisma from '@/lib/prisma';
-import { getSession } from '@/lib/auth';
+import { createClient } from '@/lib/supabase/server';
+import { createAdminClient } from '@/lib/supabase/admin';
 
-const AI_SERVICE_URL = process.env.AI_SERVICE_INTERNAL_URL || 'http://127.0.0.1:8000';
+const AI_SERVICE_URL = process.env.AI_SERVICE_INTERNAL_URL || process.env.AI_SERVICE_URL || 'http://127.0.0.1:8000';
 
 export async function POST(req: NextRequest) {
   try {
-    const session = await getSession();
-    if (!session) {
+    const supabase = await createClient();
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+
+    if (authError || !user) {
       return NextResponse.json(
         { success: false, message: 'Authentication required to run facial comparisons.' },
         { status: 401 }
@@ -27,7 +29,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Prepare multipart forward to Python AI service
+    // Forward to Python AI microservice
     const aiFormData = new FormData();
     aiFormData.append('image1', image1, image1.name || 'photo1.jpg');
     aiFormData.append('image2', image2, image2.name || 'photo2.jpg');
@@ -52,149 +54,162 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const aiData = await aiResponse.json();
+    const aiResult = await aiResponse.json();
 
-    // Check for AI-Generated image detection flag
     if (!aiResponse.ok) {
-      const detail = aiData.detail;
-      if (detail?.code === 'AI_GENERATED_IMAGE_DETECTED') {
-        // Log synthetic image event
-        await prisma.auditLog.create({
-          data: {
-            userId: session.id,
-            action: 'AI_DETECTION_FLAG',
-            eventType: 'INFERENCE',
-            severity: 'WARNING',
-            status: 'FAILURE',
-            details: JSON.stringify({
-              flaggedSlot: detail.flagged_slot,
-              confidence: detail.confidence,
-              note: detail.details,
-            }),
-          },
-        });
-
+      // If AI screening flagged synthetic content (422 Unprocessable Entity)
+      if (aiResponse.status === 422 && aiResult.code === 'AI_GENERATED_DETECTED') {
         return NextResponse.json(
           {
             success: false,
-            code: 'AI_GENERATED_IMAGE_DETECTED',
-            message: detail.message,
-            flaggedSlot: detail.flagged_slot,
-            confidence: detail.confidence,
-            details: detail.details,
+            code: 'AI_GENERATED_DETECTED',
+            flaggedImage: aiResult.flagged_image,
+            message: aiResult.message || 'AI-generated content identified in uploaded photograph.',
+            details: aiResult.details || null,
           },
           { status: 422 }
         );
       }
 
-      const errMsg = detail?.message || aiData.message || 'AI inference failed to process photographs.';
       return NextResponse.json(
-        { success: false, message: errMsg, code: detail?.code },
-        { status: aiResponse.status || 422 }
+        {
+          success: false,
+          code: aiResult.code || 'INFERENCE_ERROR',
+          message: aiResult.message || 'Facial comparison inference failed.',
+        },
+        { status: aiResponse.status }
       );
     }
 
-    // Quality summary
-    const q1 = aiData.image1_analysis?.quality?.quality_label || 'Good';
-    const q2 = aiData.image2_analysis?.quality?.quality_label || 'Good';
-    const compositeQuality = `${q1} / ${q2}`;
+    // 1. Insert comparison record into Supabase PostgreSQL
+    const { data: comparison, error: compInsertError } = await supabase
+      .from('comparisons')
+      .insert({
+        user_id: user.id,
+        similarity_score: aiResult.similarity_score,
+        raw_cosine_score: aiResult.raw_cosine_score ?? null,
+        similarity_category: aiResult.similarity_category,
+        model_version: aiResult.model_version || 'ArcFace-SFace-r100-v2.4',
+        processing_status: 'completed',
+        image_retention_consent: consentGiven,
+        image_quality_status: `${aiResult.image1?.quality?.sharpness > 50 ? 'Optimal' : 'Acceptable'} / ${aiResult.image2?.quality?.sharpness > 50 ? 'Optimal' : 'Acceptable'}`,
+        metadata: {
+          landmarks: {
+            image1: aiResult.image1?.landmarks,
+            image2: aiResult.image2?.landmarks,
+          },
+          bounding_boxes: {
+            image1: aiResult.image1?.bounding_box,
+            image2: aiResult.image2?.bounding_box,
+          },
+          inference_time_ms: aiResult.inference_time_ms,
+          explanation: aiResult.explanation,
+        },
+      })
+      .select()
+      .single();
 
-    // Read bytes for optional consent-based private retention
-    let photo1DataUrl: string | null = null;
-    let photo2DataUrl: string | null = null;
+    if (compInsertError || !comparison) {
+      console.error('Supabase comparison insert error:', compInsertError);
+      return NextResponse.json(
+        { success: false, message: 'Failed to record comparison result in Supabase.' },
+        { status: 500 }
+      );
+    }
+
+    // 2. Private Supabase Storage Upload (When user explicitly consented)
+    let photo1SignedUrl: string | null = null;
+    let photo2SignedUrl: string | null = null;
 
     if (consentGiven) {
-      const buffer1 = Buffer.from(await image1.arrayBuffer());
-      const buffer2 = Buffer.from(await image2.arrayBuffer());
-      photo1DataUrl = `data:${image1.type || 'image/jpeg'};base64,${buffer1.toString('base64')}`;
-      photo2DataUrl = `data:${image2.type || 'image/jpeg'};base64,${buffer2.toString('base64')}`;
-    }
+      try {
+        const adminClient = createAdminClient();
+        const buffer1 = Buffer.from(await image1.arrayBuffer());
+        const buffer2 = Buffer.from(await image2.arrayBuffer());
 
-    // Record comparison in database with Prisma
-    const comparisonRecord = await prisma.comparison.create({
-      data: {
-        userId: session.id,
-        similarityScore: aiData.similarity_score,
-        rawCosineScore: aiData.raw_cosine_similarity,
-        similarityCategory: aiData.similarity_category,
-        modelVersion: aiData.model_version,
-        imageQuality: compositeQuality,
-        processingStatus: 'COMPLETED',
-        consentGiven: consentGiven,
-        hasRetainedImages: consentGiven,
-        aiDetectionStatus: 'AUTHENTIC',
-        metadataJson: JSON.stringify({
-          image1_analysis: aiData.image1_analysis,
-          image2_analysis: aiData.image2_analysis,
-          inference_time_ms: aiData.inference_time_ms,
-          calibrated_explanation: aiData.calibrated_explanation,
-        }),
-      },
-    });
+        const path1 = `${user.id}/${comparison.id}/image-1.jpg`;
+        const path2 = `${user.id}/${comparison.id}/image-2.jpg`;
 
-    // Store private retained images if user opted in
-    if (consentGiven && photo1DataUrl && photo2DataUrl) {
-      await prisma.comparisonImage.createMany({
-        data: [
+        // Upload directly to private bucket: 'face-comparison-private'
+        await adminClient.storage
+          .from('face-comparison-private')
+          .upload(path1, buffer1, { contentType: image1.type || 'image/jpeg', upsert: true });
+
+        await adminClient.storage
+          .from('face-comparison-private')
+          .upload(path2, buffer2, { contentType: image2.type || 'image/jpeg', upsert: true });
+
+        // Record in comparison_images table
+        await supabase.from('comparison_images').insert([
           {
-            comparisonId: comparisonRecord.id,
-            userId: session.id,
-            slot: 'IMAGE_1',
-            storageKey: photo1DataUrl,
-            mimeType: image1.type || 'image/jpeg',
+            comparison_id: comparison.id,
+            user_id: user.id,
+            image_slot: 'image_1',
+            storage_path: path1,
+            retention_status: true,
           },
           {
-            comparisonId: comparisonRecord.id,
-            userId: session.id,
-            slot: 'IMAGE_2',
-            storageKey: photo2DataUrl,
-            mimeType: image2.type || 'image/jpeg',
+            comparison_id: comparison.id,
+            user_id: user.id,
+            image_slot: 'image_2',
+            storage_path: path2,
+            retention_status: true,
           },
-        ],
-      });
+        ]);
+
+        // Generate short-lived signed URLs (1 hour) for immediate UI display
+        const { data: signed1 } = await adminClient.storage
+          .from('face-comparison-private')
+          .createSignedUrl(path1, 3600);
+
+        const { data: signed2 } = await adminClient.storage
+          .from('face-comparison-private')
+          .createSignedUrl(path2, 3600);
+
+        photo1SignedUrl = signed1?.signedUrl || null;
+        photo2SignedUrl = signed2?.signedUrl || null;
+      } catch (storageErr) {
+        console.error('Supabase Storage retention upload error:', storageErr);
+      }
     }
 
-    // Record audit log
+    // 3. Log Audit Trail
     try {
-      await prisma.auditLog.create({
-        data: {
-          userId: session.id,
-          action: 'FACE_COMPARISON',
-          eventType: 'INFERENCE',
-          severity: 'INFO',
-          status: 'SUCCESS',
-          ipAddress: req.headers.get('x-forwarded-for') || '127.0.0.1',
-          userAgent: req.headers.get('user-agent') || 'Unknown',
-          details: JSON.stringify({
-            comparisonId: comparisonRecord.id,
-            score: aiData.similarity_score,
-            category: aiData.similarity_category,
-            retained: consentGiven,
-            latency_ms: aiData.inference_time_ms,
-          }),
+      const adminClient = createAdminClient();
+      await adminClient.from('audit_logs').insert({
+        actor_id: user.id,
+        action: 'FACE_COMPARISON_EXECUTED',
+        event_type: 'INFERENCE',
+        severity: 'INFO',
+        target_reference: comparison.id,
+        metadata: {
+          similarity_score: aiResult.similarity_score,
+          similarity_category: aiResult.similarity_category,
+          consent_given: consentGiven,
         },
       });
-    } catch (auditErr) {
-      console.warn('Failed to record comparison audit log:', auditErr);
+    } catch (e) {
+      // non-blocking
     }
 
     return NextResponse.json({
       success: true,
-      comparisonId: comparisonRecord.id,
-      data: {
-        ...aiData,
-        id: comparisonRecord.id,
-        createdAt: comparisonRecord.createdAt,
-        consentGiven,
-        hasRetainedImages: consentGiven,
-        photo1DataUrl: consentGiven ? photo1DataUrl : null,
-        photo2DataUrl: consentGiven ? photo2DataUrl : null,
-      },
+      comparisonId: comparison.id,
+      similarityScore: aiResult.similarity_score,
+      rawCosineScore: aiResult.raw_cosine_score,
+      similarityCategory: aiResult.similarity_category,
+      modelVersion: aiResult.model_version,
+      imageQuality: comparison.image_quality_status,
+      explanation: aiResult.explanation,
+      inferenceTimeMs: aiResult.inference_time_ms,
+      hasRetainedImages: consentGiven,
+      photo1Url: photo1SignedUrl,
+      photo2Url: photo2SignedUrl,
     });
-  } catch (error: any) {
-    console.error('Comparison API error:', error);
+  } catch (err: any) {
+    console.error('Compare route handler error:', err);
     return NextResponse.json(
-      { success: false, message: `An unexpected server error occurred: ${error.message}` },
+      { success: false, message: 'An unexpected internal error occurred during comparison.' },
       { status: 500 }
     );
   }

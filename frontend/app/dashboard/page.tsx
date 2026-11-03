@@ -93,7 +93,8 @@ function DashboardContent() {
       const res = await fetch('/api/history');
       if (res.ok) {
         const data = await res.json();
-        setHistoryList(data.history || []);
+        // API returns { success, data: [...], pagination: {...} }
+        setHistoryList(data.data || data.history || []);
       }
     } catch (e) {
       console.warn('Failed to load history:', e);
@@ -676,9 +677,6 @@ function DashboardContent() {
               ) : (
                 <div className="space-y-3">
                   {historyList.map((rec) => {
-                    const img1 = rec.retainedImages?.find((img: any) => img.slot === 'IMAGE_1');
-                    const img2 = rec.retainedImages?.find((img: any) => img.slot === 'IMAGE_2');
-
                     return (
                       <div
                         key={rec.id}
@@ -686,10 +684,10 @@ function DashboardContent() {
                       >
                         <div className="flex items-center gap-3.5">
                           {/* Photo thumbnails if retained */}
-                          {rec.hasRetainedImages && img1?.storageKey && img2?.storageKey ? (
+                          {rec.hasRetainedImages && rec.photo1Url && rec.photo2Url ? (
                             <div className="flex items-center gap-1.5 shrink-0">
-                              <img src={img1.storageKey} alt="P1" className="w-11 h-11 rounded-lg object-cover border border-white/20" />
-                              <img src={img2.storageKey} alt="P2" className="w-11 h-11 rounded-lg object-cover border border-white/20" />
+                              <img src={rec.photo1Url} alt="P1" className="w-11 h-11 rounded-lg object-cover border border-white/20" />
+                              <img src={rec.photo2Url} alt="P2" className="w-11 h-11 rounded-lg object-cover border border-white/20" />
                             </div>
                           ) : (
                             <div className="w-11 h-11 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center text-[10px] text-white/40">
@@ -714,7 +712,7 @@ function DashboardContent() {
                         <div className="flex items-center gap-2">
                           <button
                             onClick={() => {
-                              const meta = rec.metadataJson ? JSON.parse(rec.metadataJson) : {};
+                              const meta = rec.metadata || {};
                               generatePdfComparisonReport({
                                 id: rec.id,
                                 similarityScore: rec.similarityScore,
@@ -723,10 +721,10 @@ function DashboardContent() {
                                 modelVersion: rec.modelVersion,
                                 imageQuality: rec.imageQuality,
                                 createdAt: rec.createdAt,
-                                explanation: meta.calibrated_explanation || 'Calibrated biometric inference analysis.',
+                                explanation: meta.explanation || meta.calibrated_explanation || 'Calibrated biometric inference analysis.',
                                 userEmail: user?.email,
-                                photo1Base64: img1?.storageKey,
-                                photo2Base64: img2?.storageKey,
+                                photo1Base64: rec.photo1Url || undefined,
+                                photo2Base64: rec.photo2Url || undefined,
                               });
                             }}
                             className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white/10 hover:bg-white/15 text-cyan-200 border border-white/10 flex items-center gap-1.5 transition-colors"

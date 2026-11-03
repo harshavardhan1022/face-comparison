@@ -112,11 +112,37 @@ export async function DELETE(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const comparisonId = searchParams.get('id');
 
+    // No ID = clear all comparisons for this user
     if (!comparisonId) {
-      return NextResponse.json(
-        { success: false, message: 'Comparison ID is required.' },
-        { status: 400 }
-      );
+      // Delete all retained images from storage first
+      const { data: allImages } = await supabase
+        .from('comparison_images')
+        .select('storage_path')
+        .eq('user_id', user.id);
+
+      if (allImages && allImages.length > 0) {
+        const adminClient = createAdminClient();
+        const paths = allImages.map((img) => img.storage_path);
+        await adminClient.storage.from('face-comparison-private').remove(paths);
+      }
+
+      // Delete all comparison records for this user
+      const { error: deleteAllError } = await supabase
+        .from('comparisons')
+        .delete()
+        .eq('user_id', user.id);
+
+      if (deleteAllError) {
+        return NextResponse.json(
+          { success: false, message: deleteAllError.message },
+          { status: 500 }
+        );
+      }
+
+      return NextResponse.json({
+        success: true,
+        message: 'All comparison history cleared successfully.',
+      });
     }
 
     // Retrieve images to delete from Supabase storage

@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # AI Facial Similarity Analyzer — Production-Ready SaaS Application (v2.0.0)
 
 [![Next.js 15](https://img.shields.io/badge/Next.js-15.5-black?logo=next.js)](https://nextjs.org/)
@@ -163,3 +164,7 @@ python scripts/concurrency_test.py
 
 ## 📜 Biometric Disclaimer
 The Facial Similarity Analyzer generates estimated mathematical similarity indices between facial representations. Biometric similarity does not establish legal identity. Results are subject to photographic variation, lighting, and pose constraints.
+=======
+# face-comparison
+Similarity between two faces
+>>>>>>> 8dbf2253ced2afd5f4d8db6062ba0258092f270e

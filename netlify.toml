@@ -12,3 +12,4 @@
 
 # Redirect /api/* calls through Next.js server functions (handled by plugin automatically)
 # No manual redirects needed — @netlify/plugin-nextjs handles all Next.js API routes
+

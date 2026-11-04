@@ -49,7 +49,7 @@ services:
   # Python FastAPI AI Inference Service
   ai-service:
     build:
-      context: ../../ai-service
+      context: ../../backend
       dockerfile: ../infrastructure/docker/Dockerfile.ai-service
     container_name: face-similarity-ai
     restart: always

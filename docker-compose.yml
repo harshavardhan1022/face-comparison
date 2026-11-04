@@ -25,7 +25,7 @@ services:
   # Python FastAPI AI Inference Engine (YuNet + SFace/ArcFace)
   ai-service:
     build:
-      context: ./ai-service
+      context: ./backend
       dockerfile: ../infrastructure/docker/Dockerfile.ai-service
     container_name: face-similarity-ai
     restart: always

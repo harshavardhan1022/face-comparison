@@ -4,7 +4,7 @@ services:
     runtime: python
     region: singapore  # Closest to India — change to 'oregon' if needed
     plan: free         # Upgrade to 'starter' for always-on (no cold starts)
-    rootDir: ai-service
+    rootDir: backend
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     envVars:
@@ -13,3 +13,4 @@ services:
       - key: PYTHON_VERSION
         value: "3.11"
     healthCheckPath: /api/v1/health
+

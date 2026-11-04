@@ -1,6 +1,7 @@
 """
 Main Application Entry Point for AI Inference Service
 """
+import os
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,12 +16,13 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
-# Configure CORS
+# Configure CORS — allow all configured origins + any CORS_ORIGINS env var entries
+cors_origins = settings.get_cors_origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Restricted in production via settings.CORS_ORIGINS
+    allow_origins=cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -44,10 +46,11 @@ def root():
     }
 
 if __name__ == "__main__":
+    port = int(os.getenv("PORT", os.getenv("AI_SERVICE_PORT", "8000")))
     uvicorn.run(
         "app.main:app",
-        host=settings.HOST,
-        port=settings.PORT,
+        host="0.0.0.0",
+        port=port,
         reload=False
     )
 

@@ -2,7 +2,16 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 
-const AI_SERVICE_URL = process.env.AI_SERVICE_INTERNAL_URL || process.env.AI_SERVICE_URL || 'http://127.0.0.1:8000';
+// Production: set AI_SERVICE_URL in Netlify env vars to your Render URL
+// e.g. AI_SERVICE_URL=https://ai-face-similarity-backend.onrender.com
+const AI_SERVICE_URL = (
+  process.env.AI_SERVICE_INTERNAL_URL ||
+  process.env.AI_SERVICE_URL ||
+  'http://127.0.0.1:8000'
+).replace(/\/$/, ''); // strip trailing slash
+
+// 30-second timeout — Render free tier can be slow on cold start
+const AI_TIMEOUT_MS = 30_000;
 
 export async function POST(req: NextRequest) {
   try {
@@ -39,16 +48,23 @@ export async function POST(req: NextRequest) {
 
     let aiResponse;
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
       aiResponse = await fetch(`${AI_SERVICE_URL}/api/v1/compare`, {
         method: 'POST',
         body: aiFormData,
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
     } catch (networkErr: any) {
+      const isTimeout = networkErr?.name === 'AbortError';
       console.error('Failed to reach AI inference service:', networkErr);
       return NextResponse.json(
         {
           success: false,
-          message: 'The AI inference microservice is currently unreachable. Please ensure the Python service is running on port 8000.',
+          message: isTimeout
+            ? 'The AI inference service timed out (30s). The service may be starting up — please wait 30 seconds and try again.'
+            : 'The AI inference microservice is currently unreachable. Please check the AI_SERVICE_URL environment variable and ensure the backend is deployed.',
         },
         { status: 503 }
       );

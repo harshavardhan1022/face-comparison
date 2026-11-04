@@ -16,12 +16,19 @@ class Settings(BaseSettings):
     HOST: str = os.getenv("AI_SERVICE_HOST", "0.0.0.0")
     PORT: int = int(os.getenv("AI_SERVICE_PORT", "8000"))
     
-    # Allowed CORS Origins
-    CORS_ORIGINS: list[str] = [
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:3001",
-    ]
+    # Allowed CORS Origins — extend via CORS_ORIGINS env var (comma-separated)
+    CORS_ORIGINS: list[str] = []
+
+    @property
+    def get_cors_origins(self) -> list[str]:
+        base = [
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:3001",
+        ]
+        extra_raw = os.getenv("CORS_ORIGINS", "")
+        extra = [u.strip() for u in extra_raw.split(",") if u.strip()]
+        return list(dict.fromkeys(base + extra))  # deduplicated, order preserved
     
     # Image constraints
     MAX_FILE_SIZE_MB: int = 10

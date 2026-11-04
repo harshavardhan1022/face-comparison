@@ -1,0 +1,14 @@
+[build]
+  base    = "frontend"
+  command = "npm run build"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "20"
+  NEXT_TELEMETRY_DISABLED = "1"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
+
+# Redirect /api/* calls through Next.js server functions (handled by plugin automatically)
+# No manual redirects needed — @netlify/plugin-nextjs handles all Next.js API routes
